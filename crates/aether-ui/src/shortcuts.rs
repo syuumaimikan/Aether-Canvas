@@ -71,6 +71,10 @@ pub enum Action {
     ToolRectSelect,
     /// Select the move tool.
     ToolMove,
+    /// Select the transform tool.
+    ToolTransform,
+    /// Select the liquify tool.
+    ToolLiquify,
     /// Select the pan tool.
     ToolPan,
     /// Make the brush larger.
@@ -83,7 +87,7 @@ pub enum Action {
 
 impl Action {
     /// Every action, in the order the shortcut editor lists them.
-    pub const ALL: [Action; 34] = [
+    pub const ALL: [Action; 36] = [
         Action::NewDocument,
         Action::OpenDocument,
         Action::Save,
@@ -114,6 +118,8 @@ impl Action {
         Action::ToolEyedropper,
         Action::ToolRectSelect,
         Action::ToolMove,
+        Action::ToolTransform,
+        Action::ToolLiquify,
         Action::ToolPan,
         Action::BrushLarger,
         Action::BrushSmaller,
@@ -153,6 +159,8 @@ impl Action {
             Action::ToolEyedropper => "Eyedropper Tool",
             Action::ToolRectSelect => "Rectangle Select",
             Action::ToolMove => "Move Tool",
+            Action::ToolTransform => "Transform Tool",
+            Action::ToolLiquify => "Liquify Tool",
             Action::ToolPan => "Pan Tool",
             Action::BrushLarger => "Increase Brush Size",
             Action::BrushSmaller => "Decrease Brush Size",
@@ -276,6 +284,8 @@ impl ShortcutMap {
             (ToolEyedropper, Binding::key(Key::I)),
             (ToolRectSelect, Binding::key(Key::M)),
             (ToolMove, Binding::key(Key::V)),
+            (ToolTransform, Binding::ctrl(Key::T)),
+            (ToolLiquify, Binding::shift(Key::L)),
             (ToolPan, Binding::key(Key::H)),
             (BrushLarger, Binding::key(Key::CloseBracket)),
             (BrushSmaller, Binding::key(Key::OpenBracket)),

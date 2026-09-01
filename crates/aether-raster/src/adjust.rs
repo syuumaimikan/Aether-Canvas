@@ -63,6 +63,28 @@ impl Curve {
         self.points.insert(idx, p);
     }
 
+    /// Move the control point at `index`.
+    ///
+    /// The first and last points keep their x positions: a curve widget whose
+    /// endpoints could slide inwards would leave the ends of the tone range
+    /// undefined.
+    pub fn move_point(&mut self, index: usize, x: f32, y: f32) {
+        let last = self.points.len() - 1;
+        if index > last {
+            return;
+        }
+        let y = clampf(y, 0.0, 1.0);
+        if index == 0 || index == last {
+            self.points[index].1 = y;
+            return;
+        }
+        // Interior points stay strictly between their neighbours so the curve
+        // remains a function of x.
+        let lower = self.points[index - 1].0 + 1e-3;
+        let upper = self.points[index + 1].0 - 1e-3;
+        self.points[index] = (clampf(x, lower.min(upper), upper.max(lower)), y);
+    }
+
     /// Remove the control point at `index`, unless only two remain.
     pub fn remove_point(&mut self, index: usize) {
         if self.points.len() > 2 && index < self.points.len() {
@@ -244,6 +266,27 @@ impl Adjustment {
             green: Curve::identity(),
             blue: Curve::identity(),
         }
+    }
+
+    /// Every adjustment with sensible starting parameters, in menu order.
+    pub fn presets() -> Vec<Adjustment> {
+        vec![
+            Adjustment::default_brightness_contrast(),
+            Adjustment::Exposure { stops: 0.0 },
+            Adjustment::Gamma { gamma: 1.0 },
+            Adjustment::default_levels(),
+            Adjustment::default_curves(),
+            Adjustment::default_hue_saturation(),
+            Adjustment::ColorBalance {
+                red: 0.0,
+                green: 0.0,
+                blue: 0.0,
+            },
+            Adjustment::Invert,
+            Adjustment::Grayscale,
+            Adjustment::Threshold { level: 0.5 },
+            Adjustment::Posterize { levels: 6 },
+        ]
     }
 
     /// Neutral hue/saturation.
@@ -552,5 +595,92 @@ mod tests {
         Adjustment::Invert.apply(&mut pm, Some(IRect::new(0, 0, 2, 1)));
         assert_eq!(pm.get(0, 0), Rgba8::WHITE);
         assert_eq!(pm.get(3, 0), Rgba8::BLACK);
+    }
+}
+
+#[cfg(test)]
+mod curve_edit_tests {
+    use super::*;
+
+    #[test]
+    fn moving_an_endpoint_keeps_its_x() {
+        let mut curve = Curve::identity();
+        curve.move_point(0, 0.5, 0.8);
+        assert_eq!(curve.points()[0], (0.0, 0.8));
+        curve.move_point(1, 0.2, 0.1);
+        assert_eq!(curve.points()[1], (1.0, 0.1));
+    }
+
+    #[test]
+    fn interior_points_stay_between_their_neighbours() {
+        let mut curve = Curve::new(vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
+        curve.move_point(1, 5.0, 0.9);
+        let (x, y) = curve.points()[1];
+        assert!(x < 1.0 && x > 0.0, "x escaped its neighbours: {x}");
+        assert_eq!(y, 0.9);
+        curve.move_point(1, -3.0, 0.1);
+        assert!(curve.points()[1].0 > 0.0);
+    }
+
+    #[test]
+    fn adding_and_removing_points_keeps_the_curve_usable() {
+        let mut curve = Curve::identity();
+        curve.add_point(0.5, 0.75);
+        assert_eq!(curve.points().len(), 3);
+        assert!((curve.eval(0.5) - 0.75).abs() < 1e-3);
+        curve.remove_point(1);
+        assert_eq!(curve.points().len(), 2);
+        // Two points are the minimum; further removals are refused.
+        curve.remove_point(0);
+        assert_eq!(curve.points().len(), 2);
+    }
+
+    #[test]
+    fn out_of_range_moves_are_ignored() {
+        let mut curve = Curve::identity();
+        let before = curve.clone();
+        curve.move_point(9, 0.5, 0.5);
+        assert_eq!(curve, before);
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    #[test]
+    fn every_adjustment_preset_is_neutral_or_deliberate() {
+        // The parameterised presets must not change a mid grey when first
+        // added, so an adjustment layer starts invisible until it is tuned.
+        let grey = Rgba::gray(0.5);
+        for adjustment in Adjustment::presets() {
+            let neutral = matches!(
+                adjustment,
+                Adjustment::BrightnessContrast { .. }
+                    | Adjustment::Exposure { .. }
+                    | Adjustment::Gamma { .. }
+                    | Adjustment::Levels { .. }
+                    | Adjustment::Curves { .. }
+                    | Adjustment::HueSaturation { .. }
+                    | Adjustment::ColorBalance { .. }
+            );
+            if !neutral {
+                continue;
+            }
+            let out = adjustment.apply_color(grey);
+            assert!(
+                (out.r - grey.r).abs() < 6e-3,
+                "{} should start neutral, got {out:?}",
+                adjustment.name()
+            );
+        }
+    }
+
+    #[test]
+    fn presets_cover_every_adjustment_kind() {
+        let names: Vec<&str> = Adjustment::presets().iter().map(|a| a.name()).collect();
+        for expected in ["Levels", "Curves", "Hue / Saturation", "Invert", "Posterize"] {
+            assert!(names.contains(&expected), "missing {expected} from the menu");
+        }
     }
 }

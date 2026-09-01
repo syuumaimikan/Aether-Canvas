@@ -33,7 +33,7 @@ use aether_document::selection::Selection;
 use aether_document::tree::LayerTree;
 use aether_document::{Background, Document, DocumentMetadata};
 use aether_raster::adjust::Adjustment;
-use aether_raster::{Mask, Pixmap};
+use aether_raster::{LayerEffect, Mask, Pixmap};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -93,6 +93,9 @@ struct LayerDto {
     mask_enabled: bool,
     #[serde(default)]
     color_label: ColorLabel,
+    /// Added after schema version 1 shipped; older files simply have none.
+    #[serde(default)]
+    effects: Vec<LayerEffect>,
     #[serde(default)]
     mask: Option<String>,
     content: LayerContentDto,
@@ -230,6 +233,7 @@ pub fn serialize_project(doc: &Document) -> Result<Vec<u8>> {
                 clipping: layer.clipping,
                 mask_enabled: layer.mask_enabled,
                 color_label: layer.color_label,
+                effects: layer.effects.clone(),
                 mask,
                 content,
             });
@@ -392,6 +396,7 @@ pub fn deserialize_project(bytes: &[u8]) -> Result<Document> {
                 mask,
                 mask_enabled: dto_layer.mask_enabled,
                 color_label: dto_layer.color_label,
+                effects: dto_layer.effects,
                 content,
             },
         );
@@ -689,5 +694,72 @@ mod tests {
             doc.layer_count(),
             "structure must survive missing pixels"
         );
+    }
+}
+
+#[cfg(test)]
+mod effect_round_trip_tests {
+    use super::*;
+    use aether_raster::{EffectKind, LayerEffect};
+
+    #[test]
+    fn effect_stacks_survive_save_and_load() {
+        let mut doc = Document::new(16, 16, "effects");
+        let id = doc.active_layer;
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.effects = vec![
+                LayerEffect::new(EffectKind::DropShadow {
+                    dx: 4.0,
+                    dy: 5.0,
+                    radius: 2.0,
+                    color: Rgba8::BLACK,
+                    opacity: 0.7,
+                }),
+                LayerEffect {
+                    kind: EffectKind::Blur { sigma: 1.5 },
+                    enabled: false,
+                },
+            ];
+        }
+        let bytes = serialize_project(&doc).expect("serialize");
+        let back = deserialize_project(&bytes).expect("deserialize");
+        let restored = back.layers.get(id).expect("layer");
+        assert_eq!(restored.effects.len(), 2);
+        assert!(!restored.effects[1].enabled, "the disabled flag must survive");
+        assert_eq!(restored.effects, doc.layers.get(id).expect("layer").effects);
+    }
+
+    #[test]
+    fn projects_written_before_effects_existed_still_open() {
+        // Round-trip a document, then strip the field from the manifest the way
+        // an older build would have written it.
+        let doc = Document::new(8, 8, "legacy");
+        let bytes = serialize_project(&doc).expect("serialize");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+        let mut json = String::new();
+        archive
+            .by_name(MANIFEST)
+            .expect("manifest")
+            .read_to_string(&mut json)
+            .expect("read");
+        let mut value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        if let Some(layers) = value["document"]["layers"].as_array_mut() {
+            for layer in layers {
+                layer.as_object_mut().expect("object").remove("effects");
+            }
+        }
+
+        let mut out = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut out);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            zip.start_file(MANIFEST, options).expect("start");
+            zip.write_all(serde_json::to_string(&value).expect("json").as_bytes())
+                .expect("write");
+            zip.finish().expect("finish");
+        }
+        let back = deserialize_project(&out.into_inner()).expect("older files must still open");
+        assert_eq!(back.layer_count(), 1);
+        assert!(back.layers.iter().all(|l| l.effects.is_empty()));
     }
 }

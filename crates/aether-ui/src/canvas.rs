@@ -31,6 +31,9 @@ pub struct CanvasView {
     selection: Option<TextureHandle>,
     selection_revision: Option<u64>,
     last_screen: Option<Vec2>,
+    last_doc: Option<DocVec>,
+    last_time: f64,
+    device_force: Option<f32>,
     stroke_start: f64,
     painting: bool,
     space_pan: bool,
@@ -47,6 +50,10 @@ impl CanvasView {
         let size = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         state.viewport.size = DocVec::new(rect.width(), rect.height());
+
+        // Panel edits (a liquify radius, a transform mode) reach the live tool
+        // here, once per frame, before any input is dispatched.
+        state.sync_tools();
 
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, state.theme.canvas_backdrop());
@@ -284,14 +291,42 @@ impl CanvasView {
                         .collect();
                     painter.add(Shape::closed_line(ellipse, stroke));
                 }
+                ToolPreview::Quad(corners) => {
+                    let screen: Vec<Pos2> = corners.iter().map(|p| to_screen(rect, state, *p)).collect();
+                    painter.add(Shape::closed_line(screen.clone(), stroke));
+                    // Corner and edge grips, so the cage reads as draggable.
+                    for (i, corner) in screen.iter().enumerate() {
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(*corner, egui::vec2(8.0, 8.0)),
+                            1.0,
+                            Color32::from_rgb(230, 240, 255),
+                        );
+                        let next = screen[(i + 1) % 4];
+                        let mid = Pos2::new((corner.x + next.x) * 0.5, (corner.y + next.y) * 0.5);
+                        painter.rect_filled(
+                            egui::Rect::from_center_size(mid, egui::vec2(6.0, 6.0)),
+                            1.0,
+                            Color32::from_rgb(180, 205, 240),
+                        );
+                    }
+                }
+                ToolPreview::Grid { points, cols, rows } => {
+                    let screen: Vec<Pos2> = points.iter().map(|p| to_screen(rect, state, *p)).collect();
+                    let node = |col: usize, row: usize| screen[row * cols + col];
+                    for row in 0..rows {
+                        for col in 0..cols {
+                            if col + 1 < cols {
+                                painter.line_segment([node(col, row), node(col + 1, row)], stroke);
+                            }
+                            if row + 1 < rows {
+                                painter.line_segment([node(col, row), node(col, row + 1)], stroke);
+                            }
+                            painter.circle_filled(node(col, row), 3.5, Color32::from_rgb(230, 240, 255));
+                        }
+                    }
+                }
                 ToolPreview::Polyline(points) => {
-                    let screen: Vec<Pos2> = points
-                        .iter()
-                        .map(|p| {
-                            let s = state.viewport.doc_to_screen(*p);
-                            Pos2::new(rect.min.x + s.x, rect.min.y + s.y)
-                        })
-                        .collect();
+                    let screen: Vec<Pos2> = points.iter().map(|p| to_screen(rect, state, *p)).collect();
                     painter.add(Shape::closed_line(screen, stroke));
                 }
             }
@@ -361,6 +396,27 @@ impl CanvasView {
         }
 
         let doc_point = state.viewport.screen_to_doc(DocVec::new(screen.x, screen.y));
+
+        // Stylus force arrives as a touch event; remember the last value we saw
+        // so a pen that only reports on movement still drives the brush.
+        ctx.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Touch {
+                    force: Some(force), ..
+                } = event
+                {
+                    self.device_force = Some(*force);
+                }
+            }
+        });
+        let dt = (time - self.last_time).max(1e-3) as f32;
+        let speed = match self.last_doc {
+            Some(previous) => previous.distance(doc_point) / dt,
+            None => 0.0,
+        };
+        self.last_time = time;
+        self.last_doc = Some(doc_point);
+        let pressure = state.pressure_source.resolve(self.device_force, speed);
         let button = if ctx.input(|i| i.pointer.secondary_down()) {
             PointerButton::Secondary
         } else {
@@ -369,10 +425,10 @@ impl CanvasView {
         let event = ToolEvent {
             sample: InputSample {
                 position: doc_point,
-                pressure: 1.0,
+                pressure,
                 tilt: DocVec::ZERO,
                 rotation: 0.0,
-                velocity: 0.0,
+                velocity: speed,
                 time: time - self.stroke_start,
                 modifiers: mods,
             },
@@ -382,14 +438,27 @@ impl CanvasView {
             modifiers: mods,
         };
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.painting {
-            state.tool_pointer(PointerPhase::Cancel, &event);
-            self.painting = false;
+        // Enter confirms a modal tool, Escape abandons it — and Escape also
+        // aborts a stroke in progress.
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && state.has_pending_tool_edit() {
+            state.commit_tool();
             return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.painting {
+                state.tool_pointer(PointerPhase::Cancel, &event);
+                self.painting = false;
+                return;
+            }
+            if state.has_pending_tool_edit() {
+                state.cancel_tool();
+                return;
+            }
         }
 
         if response.drag_started() || (response.clicked() && !self.painting) {
             self.stroke_start = time;
+            self.device_force = None;
             self.painting = true;
             state.tool_pointer(PointerPhase::Down, &event);
         } else if response.dragged() && self.painting {
@@ -415,6 +484,12 @@ fn quad_mesh(texture: egui::TextureId, corners: [Pos2; 4], uv: [Pos2; 4], tint: 
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     Shape::mesh(mesh)
+}
+
+/// Map a document point into widget coordinates.
+fn to_screen(rect: Rect, state: &EditorState, p: DocVec) -> Pos2 {
+    let s = state.viewport.doc_to_screen(p);
+    Pos2::new(rect.min.x + s.x, rect.min.y + s.y)
 }
 
 /// The four corners of a document rectangle, in widget coordinates.

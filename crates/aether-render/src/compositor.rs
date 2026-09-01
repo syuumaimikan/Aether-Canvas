@@ -15,6 +15,10 @@
 //! * **Adjustment layers.** The adjustment is evaluated against the current
 //!   backdrop and the result is blended back in, which is what makes it
 //!   non-destructive and maskable.
+//!
+//! A layer's non-destructive effect stack is evaluated between producing its
+//! content and blending it in, so a drop shadow lands behind the layer but in
+//! front of everything below it.
 
 use aether_core::blend::BlendMode;
 use aether_core::color::Rgba8;
@@ -340,16 +344,24 @@ impl Compositor {
             }
         };
 
-        if layer.transform.is_identity() {
-            Some(source)
+        let source = if layer.transform.is_identity() {
+            source
         } else {
-            Some(transform_pixmap(
+            transform_pixmap(
                 &source,
                 &layer.transform,
                 doc.width,
                 doc.height,
                 options.interpolation,
-            ))
+            )
+        };
+
+        // Effects run last, so they see the layer exactly as it will be blended
+        // — including its transform — but before opacity, mask and blend mode.
+        if layer.has_effects() {
+            Some(aether_raster::effect::apply_stack(&source, &layer.effects))
+        } else {
+            Some(source)
         }
     }
 }
@@ -669,5 +681,101 @@ mod tests {
         fill_layer(&mut doc, ids[1], Rgba8::WHITE);
         let thumb = Compositor::new().render_layer(&doc, ids[0]);
         assert_eq!(thumb.get(4, 4), Rgba8::BLACK);
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::*;
+    use aether_core::color::Rgba8;
+    use aether_document::layer::Layer;
+    use aether_raster::{EffectKind, LayerEffect};
+
+    fn doc_with_square() -> (Document, LayerId) {
+        let mut doc = Document::empty(64, 64, "test");
+        let id = doc.next_layer_id();
+        doc.layers
+            .push_top(Layer::raster(id, "L", 64, 64))
+            .expect("insert");
+        if let Some(pm) = doc.layers.get_mut(id).and_then(|l| l.pixmap_mut()) {
+            pm.fill_rect(IRect::new(24, 24, 16, 16), Rgba8::new(200, 200, 200, 255));
+        }
+        doc.active_layer = id;
+        (doc, id)
+    }
+
+    #[test]
+    fn a_layer_effect_shows_up_in_the_composite() {
+        let (mut doc, id) = doc_with_square();
+        let out_before = Compositor::new().render(&doc);
+        assert_eq!(out_before.get(45, 45).a, 0);
+
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.effects.push(LayerEffect::new(EffectKind::DropShadow {
+                dx: 8.0,
+                dy: 8.0,
+                radius: 2.0,
+                color: Rgba8::BLACK,
+                opacity: 1.0,
+            }));
+        }
+        let out = Compositor::new().render(&doc);
+        assert!(out.get(45, 45).a > 0, "the shadow should be composited");
+        assert_eq!(
+            out.get(32, 32),
+            Rgba8::new(200, 200, 200, 255),
+            "artwork unchanged"
+        );
+    }
+
+    #[test]
+    fn a_disabled_effect_costs_nothing_and_changes_nothing() {
+        let (mut doc, id) = doc_with_square();
+        let plain = Compositor::new().render(&doc);
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.effects.push(LayerEffect {
+                kind: EffectKind::Blur { sigma: 8.0 },
+                enabled: false,
+            });
+        }
+        assert_eq!(Compositor::new().render(&doc), plain);
+    }
+
+    #[test]
+    fn effects_are_applied_before_layer_opacity() {
+        let (mut doc, id) = doc_with_square();
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.effects.push(LayerEffect::new(EffectKind::ColorOverlay {
+                color: Rgba8::rgb(255, 0, 0),
+                opacity: 1.0,
+                blend: BlendMode::Normal,
+            }));
+            layer.opacity = 0.5;
+        }
+        let out = Compositor::new().render(&doc);
+        let pixel = out.get(32, 32);
+        assert_eq!(pixel.r, 255);
+        assert!(
+            (pixel.a as i32 - 128).abs() <= 2,
+            "layer opacity should still apply: {pixel:?}"
+        );
+    }
+
+    #[test]
+    fn effects_stay_inside_a_layer_mask() {
+        let (mut doc, id) = doc_with_square();
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.effects.push(LayerEffect::new(EffectKind::Glow {
+                radius: 10.0,
+                intensity: 2.0,
+                color: Rgba8::rgb(255, 0, 0),
+            }));
+            let mut mask = Mask::new(64, 64);
+            mask.fill_rect(IRect::new(0, 0, 32, 64), 255);
+            layer.mask = Some(mask);
+        }
+        let out = Compositor::new().render(&doc);
+        assert!(out.get(20, 32).a > 0, "glow inside the mask");
+        assert_eq!(out.get(50, 32).a, 0, "glow must not escape the mask");
     }
 }

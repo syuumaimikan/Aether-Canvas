@@ -11,13 +11,14 @@
 //! layers come back with their original ids and nesting.
 
 use crate::document::Document;
-use crate::layer::{ColorLabel, Layer};
+use crate::layer::{ColorLabel, Layer, LayerContent};
 use crate::selection::Selection;
 use crate::tree::DetachedSubtree;
 use aether_core::blend::BlendMode;
 use aether_core::math::IRect;
 use aether_core::{AetherError, LayerId, Result};
-use aether_raster::{Mask, Pixmap};
+use aether_raster::adjust::Adjustment;
+use aether_raster::{LayerEffect, Mask, Pixmap};
 use std::any::Any;
 use std::fmt::Debug;
 
@@ -508,6 +509,153 @@ impl Command for SetLayerMaskCommand {
     }
 }
 
+/// Retune an adjustment layer.
+///
+/// Adjustment parameters live in the layer's content rather than in its common
+/// properties, so they get their own command — with the same coalescing so a
+/// slider drag is one history entry.
+#[derive(Debug)]
+pub struct SetAdjustmentCommand {
+    id: LayerId,
+    after: Adjustment,
+    before: Option<Adjustment>,
+}
+
+impl SetAdjustmentCommand {
+    /// Set the adjustment on layer `id`.
+    pub fn new(id: LayerId, adjustment: Adjustment) -> Self {
+        Self {
+            id,
+            after: adjustment,
+            before: None,
+        }
+    }
+}
+
+impl Command for SetAdjustmentCommand {
+    fn name(&self) -> String {
+        format!("Adjust {}", self.after.name())
+    }
+
+    fn apply(&mut self, doc: &mut Document) -> Result<()> {
+        let layer = doc.layers.try_get_mut(self.id)?;
+        let LayerContent::Adjustment(content) = &mut layer.content else {
+            return Err(AetherError::document("that layer is not an adjustment layer"));
+        };
+        if self.before.is_none() {
+            self.before = Some(content.adjustment.clone());
+        }
+        content.adjustment = self.after.clone();
+        doc.mark_all_dirty();
+        Ok(())
+    }
+
+    fn undo(&mut self, doc: &mut Document) -> Result<()> {
+        let before = self
+            .before
+            .clone()
+            .ok_or_else(|| AetherError::document("adjustment command was never applied"))?;
+        let layer = doc.layers.try_get_mut(self.id)?;
+        let LayerContent::Adjustment(content) = &mut layer.content else {
+            return Err(AetherError::document("that layer is not an adjustment layer"));
+        };
+        content.adjustment = before;
+        doc.mark_all_dirty();
+        Ok(())
+    }
+
+    fn coalesce_key(&self) -> Option<String> {
+        Some(format!("adjustment:{}", self.id))
+    }
+
+    fn absorb(&mut self, newer: &dyn Command) -> bool {
+        let Some(other) = newer.as_any().downcast_ref::<SetAdjustmentCommand>() else {
+            return false;
+        };
+        if other.id != self.id {
+            return false;
+        }
+        self.after = other.after.clone();
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Replace a layer's effect stack.
+///
+/// The whole stack is swapped in one command rather than one command per
+/// tweak: an effect's parameters are tiny, and treating the stack as a value
+/// means adding, removing, reordering and retuning all undo identically.
+#[derive(Debug)]
+pub struct SetLayerEffectsCommand {
+    label: String,
+    id: LayerId,
+    after: Vec<LayerEffect>,
+    before: Option<Vec<LayerEffect>>,
+}
+
+impl SetLayerEffectsCommand {
+    /// Set the effect stack on layer `id`.
+    pub fn new(label: impl Into<String>, id: LayerId, effects: Vec<LayerEffect>) -> Self {
+        Self {
+            label: label.into(),
+            id,
+            after: effects,
+            before: None,
+        }
+    }
+}
+
+impl Command for SetLayerEffectsCommand {
+    fn name(&self) -> String {
+        self.label.clone()
+    }
+
+    fn apply(&mut self, doc: &mut Document) -> Result<()> {
+        let layer = doc.layers.try_get_mut(self.id)?;
+        if self.before.is_none() {
+            self.before = Some(layer.effects.clone());
+        }
+        layer.effects = self.after.clone();
+        doc.mark_all_dirty();
+        Ok(())
+    }
+
+    fn undo(&mut self, doc: &mut Document) -> Result<()> {
+        let before = self
+            .before
+            .clone()
+            .ok_or_else(|| AetherError::document("effect command was never applied"))?;
+        doc.layers.try_get_mut(self.id)?.effects = before;
+        doc.mark_all_dirty();
+        Ok(())
+    }
+
+    fn coalesce_key(&self) -> Option<String> {
+        // Dragging an effect slider emits a command per frame.
+        Some(format!("effects:{}", self.id))
+    }
+
+    fn absorb(&mut self, newer: &dyn Command) -> bool {
+        let Some(other) = newer.as_any().downcast_ref::<SetLayerEffectsCommand>() else {
+            return false;
+        };
+        if other.id != self.id {
+            return false;
+        }
+        self.after = other.after.clone();
+        self.label = other.label.clone();
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Change the selection.
 #[derive(Debug)]
 pub struct SetSelectionCommand {
@@ -896,5 +1044,99 @@ mod tests {
         assert!(d.layers.get(id).and_then(|l| l.mask.as_ref()).is_some());
         cmd.undo(&mut d).expect("undo");
         assert!(d.layers.get(id).and_then(|l| l.mask.as_ref()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod effect_command_tests {
+    use super::*;
+    use aether_raster::{EffectKind, LayerEffect};
+
+    fn doc() -> Document {
+        Document::new(16, 16, "test")
+    }
+
+    #[test]
+    fn setting_effects_round_trips() {
+        let mut d = doc();
+        let id = d.active_layer;
+        let effects = vec![LayerEffect::new(EffectKind::Blur { sigma: 3.0 })];
+        let mut cmd = SetLayerEffectsCommand::new("Add Blur", id, effects.clone());
+        cmd.apply(&mut d).expect("apply");
+        assert_eq!(d.layers.get(id).map(|l| l.effects.clone()), Some(effects));
+        cmd.undo(&mut d).expect("undo");
+        assert_eq!(d.layers.get(id).map(|l| l.effects.len()), Some(0));
+    }
+
+    #[test]
+    fn effect_edits_coalesce_into_one_history_entry() {
+        let mut d = doc();
+        let id = d.active_layer;
+        let mut first = SetLayerEffectsCommand::new(
+            "Blur",
+            id,
+            vec![LayerEffect::new(EffectKind::Blur { sigma: 2.0 })],
+        );
+        first.apply(&mut d).expect("apply");
+        let mut second = SetLayerEffectsCommand::new(
+            "Blur",
+            id,
+            vec![LayerEffect::new(EffectKind::Blur { sigma: 9.0 })],
+        );
+        second.apply(&mut d).expect("apply");
+        assert!(first.absorb(&second));
+        first.undo(&mut d).expect("undo");
+        assert!(d.layers.get(id).map(|l| l.effects.is_empty()).unwrap_or(false));
+    }
+
+    #[test]
+    fn layers_report_whether_effects_are_active() {
+        let mut d = doc();
+        let id = d.active_layer;
+        let layer = d.layers.get_mut(id).expect("layer");
+        assert!(!layer.has_effects());
+        layer.effects.push(LayerEffect {
+            kind: EffectKind::Blur { sigma: 1.0 },
+            enabled: false,
+        });
+        assert!(!layer.has_effects(), "a disabled effect does not count");
+        layer.effects[0].enabled = true;
+        assert!(layer.has_effects());
+    }
+}
+
+#[cfg(test)]
+mod adjustment_command_tests {
+    use super::*;
+    use crate::layer::Layer;
+    use aether_raster::adjust::Adjustment;
+
+    #[test]
+    fn retuning_an_adjustment_layer_round_trips() {
+        let mut d = Document::new(8, 8, "test");
+        let id = d.next_layer_id();
+        d.layers
+            .push_top(Layer::adjustment(id, "Levels", Adjustment::default_levels()))
+            .expect("insert");
+
+        let mut cmd = SetAdjustmentCommand::new(id, Adjustment::Invert);
+        cmd.apply(&mut d).expect("apply");
+        match &d.layers.get(id).expect("layer").content {
+            LayerContent::Adjustment(a) => assert_eq!(a.adjustment, Adjustment::Invert),
+            other => panic!("unexpected content: {other:?}"),
+        }
+        cmd.undo(&mut d).expect("undo");
+        match &d.layers.get(id).expect("layer").content {
+            LayerContent::Adjustment(a) => assert_eq!(a.adjustment, Adjustment::default_levels()),
+            other => panic!("unexpected content: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adjusting_a_raster_layer_is_refused() {
+        let mut d = Document::new(8, 8, "test");
+        let id = d.active_layer;
+        let mut cmd = SetAdjustmentCommand::new(id, Adjustment::Invert);
+        assert!(cmd.apply(&mut d).is_err());
     }
 }

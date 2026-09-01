@@ -4,6 +4,10 @@
 //! they build a [`Command`](aether_document::Command) and hand it to the
 //! history, so everything they do is undoable and reachable from tests.
 //!
+//! Tools live in submodules: [`stroke`] (brush and eraser), [`paint`]
+//! (bucket and eyedropper), [`select`] (marquee, lasso, wand), [`placement`]
+//! (move and pan), [`transform`] and [`liquify`].
+//!
 //! ## Live strokes without losing undo
 //!
 //! Painting has to be visible while the pointer is down, but the history entry
@@ -15,16 +19,27 @@
 //! from darkening each other. When the pointer lifts, the snapshot provides the
 //! "before" image for the undo command.
 
-use aether_core::blend::BlendMode;
-use aether_core::color::{Rgba, Rgba8};
+pub mod liquify;
+pub mod paint;
+pub mod placement;
+pub mod select;
+pub mod stroke;
+pub mod transform;
+
+pub use liquify::{LiquifyMode, LiquifyTool};
+pub use paint::{BucketTool, EyedropperTool};
+pub use placement::{MoveTool, PanTool};
+pub use select::{LassoTool, MagicWandTool, MarqueeShape, MarqueeTool};
+pub use stroke::{StrokeMode, StrokeTool};
+pub use transform::{TransformHandle, TransformMode, TransformTool};
+
+use aether_core::color::Rgba;
 use aether_core::input::{InputSample, Modifiers, PointerButton};
 use aether_core::math::{IRect, Vec2};
-use aether_document::command::{RegionEdit, SetSelectionCommand};
-use aether_document::selection::{Selection, SelectionMode};
-use aether_document::{Document, History, LayerId};
-use aether_raster::composite::{erase_masked, fill_masked, CompositeOptions};
+use aether_document::selection::SelectionMode;
+use aether_document::{Document, History};
 use aether_raster::tile::TileIter;
-use aether_raster::{fill, BrushPreset, Pixmap, StrokeState};
+use aether_raster::{BrushPreset, Pixmap};
 use aether_render::Viewport;
 use std::collections::BTreeMap;
 
@@ -49,6 +64,10 @@ pub enum ToolId {
     MagicWand,
     /// Move the active layer's pixels.
     Move,
+    /// Scale, rotate, skew, distort or warp the active layer.
+    Transform,
+    /// Push pixels around with a brush.
+    Liquify,
     /// Pan the view.
     Pan,
     /// A tool contributed by a plugin.
@@ -68,6 +87,8 @@ impl ToolId {
             ToolId::Lasso => "tool.lasso",
             ToolId::MagicWand => "tool.wand",
             ToolId::Move => "tool.move",
+            ToolId::Transform => "tool.transform",
+            ToolId::Liquify => "tool.liquify",
             ToolId::Pan => "tool.pan",
             ToolId::Custom(name) => name,
         }
@@ -85,6 +106,8 @@ impl ToolId {
             ToolId::Lasso => "✎",
             ToolId::MagicWand => "✨",
             ToolId::Move => "✥",
+            ToolId::Transform => "⤢",
+            ToolId::Liquify => "🌀",
             ToolId::Pan => "✋",
             ToolId::Custom(_) => "＊",
         }
@@ -142,12 +165,51 @@ impl ToolContext<'_> {
 /// What a tool wants drawn on top of the canvas while it is active.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolPreview {
+    /// A four-corner transform cage with grab handles.
+    Quad([Vec2; 4]),
+    /// A deformation grid, row-major with `cols` points per row.
+    Grid {
+        /// Node positions in document space.
+        points: Vec<Vec2>,
+        /// Nodes per row.
+        cols: usize,
+        /// Number of rows.
+        rows: usize,
+    },
     /// A rubber-band rectangle in document space.
     Rect(IRect),
     /// A rubber-band ellipse in document space.
     Ellipse(IRect),
     /// A freehand outline in document space.
     Polyline(Vec<Vec2>),
+}
+
+/// Tool settings the user edits in the tool-options panel.
+///
+/// Modal tools keep their own working state (the transform cage, the liquify
+/// field) but read their *settings* from here, so a panel can retune a live
+/// gesture without needing to reach inside the tool.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToolSettings {
+    /// How the transform tool interprets a drag.
+    pub transform_mode: TransformMode,
+    /// What a liquify drag does.
+    pub liquify_mode: LiquifyMode,
+    /// Liquify brush radius in document pixels.
+    pub liquify_radius: f32,
+    /// Liquify strength, `0..=1`.
+    pub liquify_strength: f32,
+}
+
+impl Default for ToolSettings {
+    fn default() -> Self {
+        Self {
+            transform_mode: TransformMode::Free,
+            liquify_mode: LiquifyMode::Push,
+            liquify_radius: 60.0,
+            liquify_strength: 0.5,
+        }
+    }
 }
 
 /// The interface every tool implements.
@@ -170,6 +232,20 @@ pub trait Tool {
     /// Overlay to draw while the gesture is in progress.
     fn preview(&self) -> Option<ToolPreview> {
         None
+    }
+
+    /// Take on settings edited in the tool-options panel.
+    fn sync_settings(&mut self, _settings: &ToolSettings) {}
+
+    /// Apply a modal tool's pending edit (Enter, or switching tool).
+    ///
+    /// Most tools finish on pointer-up and do nothing here; the transform and
+    /// liquify tools stay live across many gestures until confirmed.
+    fn commit(&mut self, _ctx: &mut ToolContext) {}
+
+    /// True while the tool holds an uncommitted edit.
+    fn is_pending(&self) -> bool {
+        false
     }
 
     /// True while the tool is mid-gesture.
@@ -250,706 +326,6 @@ impl StrokeSnapshot {
     }
 }
 
-/// Whether a stroke lays down colour or removes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StrokeMode {
-    /// Paint with the primary colour.
-    Paint,
-    /// Erase.
-    Erase,
-}
-
-/// The brush and the eraser: same engine, different final compositing step.
-pub struct StrokeTool {
-    mode: StrokeMode,
-    stroke: Option<StrokeState>,
-    snapshot: StrokeSnapshot,
-    layer: LayerId,
-    color: Rgba,
-    dirty: IRect,
-    seed: u64,
-    last_time: f64,
-    last_position: Vec2,
-}
-
-impl StrokeTool {
-    /// A paint or erase tool.
-    pub fn new(mode: StrokeMode) -> Self {
-        Self {
-            mode,
-            stroke: None,
-            snapshot: StrokeSnapshot::new(),
-            layer: LayerId::NONE,
-            color: Rgba::BLACK,
-            dirty: IRect::EMPTY,
-            seed: 1,
-            last_time: 0.0,
-            last_position: Vec2::ZERO,
-        }
-    }
-
-    fn begin(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        if let Err(err) = ctx.doc.paint_target() {
-            ctx.report(err.to_string());
-            return;
-        }
-        self.layer = ctx.doc.active_layer;
-        self.color = if event.button == PointerButton::Secondary {
-            ctx.secondary
-        } else {
-            *ctx.primary
-        };
-        self.seed = self.seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut preset = ctx.brush.clone();
-        if self.mode == StrokeMode::Erase {
-            // Erasing always removes alpha; a blend mode here would be meaningless.
-            preset.blend = BlendMode::Normal;
-        }
-        self.stroke = Some(StrokeState::begin(
-            preset,
-            ctx.doc.width,
-            ctx.doc.height,
-            self.seed,
-        ));
-        self.snapshot.clear();
-        self.dirty = IRect::EMPTY;
-        self.last_time = event.sample.time;
-        self.last_position = event.sample.position;
-        self.push_sample(ctx, event);
-    }
-
-    /// Feed one sample and re-composite the affected tiles.
-    fn push_sample(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        let Some(stroke) = self.stroke.as_mut() else {
-            return;
-        };
-        // Derive velocity so brushes can taper even without a pressure-capable device.
-        let dt = (event.sample.time - self.last_time).max(1e-4) as f32;
-        let velocity = event.sample.position.distance(self.last_position) / dt;
-        self.last_time = event.sample.time;
-        self.last_position = event.sample.position;
-        let sample = InputSample {
-            velocity,
-            ..event.sample
-        };
-
-        let touched = stroke.push(sample);
-        if touched.is_empty() {
-            return;
-        }
-        self.dirty = self.dirty.union(&touched);
-
-        let alpha_lock = ctx
-            .doc
-            .layers
-            .get(self.layer)
-            .map(|l| l.alpha_lock)
-            .unwrap_or(false);
-        let selection = ctx.doc.selection.mask().cloned();
-        let opacity = stroke.opacity_for_last_sample();
-        let blend = stroke.preset().blend;
-        let coverage = stroke.buffer().clone();
-
-        let Ok(target) = ctx.doc.paint_target() else {
-            return;
-        };
-        // Tiles the stroke has newly reached must be saved before being drawn on.
-        self.snapshot.capture(target, touched);
-        // Re-composite the whole stroke over the untouched original, so
-        // overlapping dabs do not build up.
-        let region = touched;
-        self.snapshot.restore(target, region);
-
-        let mut mask = coverage;
-        if let Some(sel) = &selection {
-            mask.multiply(sel);
-        }
-        let opts = CompositeOptions {
-            blend,
-            opacity,
-            offset: (0, 0),
-            region: Some(region),
-            alpha_lock,
-        };
-        match self.mode {
-            StrokeMode::Paint => {
-                fill_masked(target, self.color, &mask, &opts);
-            }
-            StrokeMode::Erase => {
-                erase_masked(target, &mask, opacity, Some(region));
-            }
-        }
-        ctx.doc.mark_dirty(region);
-    }
-
-    fn finish(&mut self, ctx: &mut ToolContext) {
-        let Some(stroke) = self.stroke.take() else {
-            return;
-        };
-        let dirty = self.dirty.intersect(&ctx.doc.bounds());
-        if stroke.is_empty() || dirty.is_empty() {
-            self.snapshot.clear();
-            return;
-        }
-        let before = self.snapshot.extract(dirty);
-        let after = ctx
-            .doc
-            .layers
-            .get(self.layer)
-            .and_then(|l| l.pixmap())
-            .map(|p| p.copy_rect(dirty))
-            .unwrap_or_else(|| Pixmap::new(dirty.width as u32, dirty.height as u32));
-        let label = match self.mode {
-            StrokeMode::Paint => "Brush Stroke",
-            StrokeMode::Erase => "Erase",
-        };
-        let edit = RegionEdit::new(label, self.layer, dirty, before, after);
-        if !edit.is_noop() {
-            ctx.history.push_applied(Box::new(edit));
-        }
-        self.snapshot.clear();
-        self.dirty = IRect::EMPTY;
-    }
-}
-
-impl Tool for StrokeTool {
-    fn id(&self) -> ToolId {
-        match self.mode {
-            StrokeMode::Paint => ToolId::Brush,
-            StrokeMode::Erase => ToolId::Eraser,
-        }
-    }
-
-    fn pointer_down(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        self.begin(ctx, event);
-    }
-
-    fn pointer_move(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        if self.stroke.is_some() {
-            self.push_sample(ctx, event);
-        }
-    }
-
-    fn pointer_up(&mut self, ctx: &mut ToolContext, _event: &ToolEvent) {
-        self.finish(ctx);
-    }
-
-    fn cancel(&mut self, ctx: &mut ToolContext) {
-        // Roll the layer back to the pre-stroke pixels.
-        if self.stroke.take().is_some() {
-            let region = self.dirty;
-            if let Ok(target) = ctx.doc.paint_target() {
-                self.snapshot.restore(target, region);
-            }
-            ctx.doc.mark_dirty(region);
-        }
-        self.snapshot.clear();
-        self.dirty = IRect::EMPTY;
-    }
-
-    fn is_active(&self) -> bool {
-        self.stroke.is_some()
-    }
-}
-
-/// Flood fill.
-pub struct BucketTool;
-
-impl Tool for BucketTool {
-    fn id(&self) -> ToolId {
-        ToolId::Bucket
-    }
-
-    fn pointer_down(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        let point = event.sample.position;
-        let (x, y) = (point.x.floor() as i32, point.y.floor() as i32);
-        if !ctx.doc.bounds().contains(x, y) {
-            return;
-        }
-        if let Err(err) = ctx.doc.paint_target() {
-            ctx.report(err.to_string());
-            return;
-        }
-        let layer = ctx.doc.active_layer;
-        let source = if ctx.sample_all_layers {
-            ctx.composite.clone()
-        } else {
-            ctx.doc
-                .layers
-                .get(layer)
-                .and_then(|l| l.pixmap())
-                .cloned()
-                .unwrap_or_else(|| Pixmap::new(ctx.doc.width, ctx.doc.height))
-        };
-        let mut mask = fill::flood_fill_mask(&source, x, y, ctx.tolerance);
-        if let Some(sel) = ctx.doc.selection.mask() {
-            mask.multiply(sel);
-        }
-        let region = mask.coverage_bounds();
-        if region.is_empty() {
-            ctx.report("Nothing to fill here");
-            return;
-        }
-        let color = if event.button == PointerButton::Secondary {
-            ctx.secondary
-        } else {
-            *ctx.primary
-        };
-        let alpha_lock = ctx.doc.layers.get(layer).map(|l| l.alpha_lock).unwrap_or(false);
-        let blend = ctx.brush.blend;
-
-        let edit = RegionEdit::capture(ctx.doc, layer, region, "Bucket Fill", |pixmap| {
-            let opts = CompositeOptions {
-                blend,
-                opacity: 1.0,
-                offset: (0, 0),
-                region: Some(region),
-                alpha_lock,
-            };
-            fill_masked(pixmap, color, &mask, &opts);
-            Ok(())
-        });
-        match edit {
-            Ok(edit) if !edit.is_noop() => ctx.history.push_applied(Box::new(edit)),
-            Ok(_) => {}
-            Err(err) => ctx.report(err.to_string()),
-        }
-    }
-
-    fn pointer_move(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {}
-
-    fn pointer_up(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {}
-}
-
-/// Pick a colour from the canvas.
-pub struct EyedropperTool;
-
-impl EyedropperTool {
-    fn sample(&self, ctx: &mut ToolContext, event: &ToolEvent) {
-        let p = event.sample.position;
-        let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
-        let color = if ctx.sample_all_layers {
-            ctx.composite.get(x, y)
-        } else {
-            ctx.doc
-                .layers
-                .get(ctx.doc.active_layer)
-                .and_then(|l| l.pixmap())
-                .map(|pm| pm.get(x, y))
-                .unwrap_or(Rgba8::TRANSPARENT)
-        };
-        if color.a == 0 {
-            return;
-        }
-        *ctx.primary = color.to_rgba().with_alpha(1.0);
-        ctx.report(format!("Picked {}", color.to_hex()));
-    }
-}
-
-impl Tool for EyedropperTool {
-    fn id(&self) -> ToolId {
-        ToolId::Eyedropper
-    }
-
-    fn pointer_down(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        self.sample(ctx, event);
-    }
-
-    fn pointer_move(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        self.sample(ctx, event);
-    }
-
-    fn pointer_up(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {}
-}
-
-/// The shape a marquee tool drags out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MarqueeShape {
-    /// Rectangular.
-    Rect,
-    /// Elliptical.
-    Ellipse,
-}
-
-/// Rectangular and elliptical selection.
-pub struct MarqueeTool {
-    shape: MarqueeShape,
-    start: Option<Vec2>,
-    current: Vec2,
-}
-
-impl MarqueeTool {
-    /// A marquee tool of the given shape.
-    pub fn new(shape: MarqueeShape) -> Self {
-        Self {
-            shape,
-            start: None,
-            current: Vec2::ZERO,
-        }
-    }
-
-    fn rect(&self) -> IRect {
-        let Some(start) = self.start else {
-            return IRect::EMPTY;
-        };
-        let min = start.min(self.current);
-        let max = start.max(self.current);
-        IRect::from_bounds(
-            min.x.round() as i32,
-            min.y.round() as i32,
-            max.x.round() as i32,
-            max.y.round() as i32,
-        )
-    }
-}
-
-impl Tool for MarqueeTool {
-    fn id(&self) -> ToolId {
-        match self.shape {
-            MarqueeShape::Rect => ToolId::RectSelect,
-            MarqueeShape::Ellipse => ToolId::EllipseSelect,
-        }
-    }
-
-    fn pointer_down(&mut self, _ctx: &mut ToolContext, event: &ToolEvent) {
-        self.start = Some(event.sample.position);
-        self.current = event.sample.position;
-    }
-
-    fn pointer_move(&mut self, _ctx: &mut ToolContext, event: &ToolEvent) {
-        if self.start.is_some() {
-            self.current = event.sample.position;
-        }
-    }
-
-    fn pointer_up(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        if self.start.is_none() {
-            return;
-        }
-        self.current = event.sample.position;
-        let rect = self.rect();
-        self.start = None;
-        if rect.is_empty() {
-            // A click with no drag clears the selection, like every other editor.
-            if ctx.doc.selection.is_active() {
-                let command = SetSelectionCommand::new("Deselect", Selection::none());
-                let _ = ctx.history.execute(ctx.doc, Box::new(command));
-            }
-            return;
-        }
-        let mut selection = ctx.doc.selection.clone();
-        let (w, h) = (ctx.doc.width, ctx.doc.height);
-        match self.shape {
-            MarqueeShape::Rect => selection.select_rect(w, h, rect, ctx.selection_mode),
-            MarqueeShape::Ellipse => selection.select_ellipse(w, h, rect, ctx.selection_mode),
-        }
-        let command = SetSelectionCommand::new("Select", selection);
-        if let Err(err) = ctx.history.execute(ctx.doc, Box::new(command)) {
-            ctx.report(err.to_string());
-        }
-    }
-
-    fn cancel(&mut self, _ctx: &mut ToolContext) {
-        self.start = None;
-    }
-
-    fn preview(&self) -> Option<ToolPreview> {
-        let rect = self.rect();
-        if self.start.is_none() || rect.is_empty() {
-            return None;
-        }
-        Some(match self.shape {
-            MarqueeShape::Rect => ToolPreview::Rect(rect),
-            MarqueeShape::Ellipse => ToolPreview::Ellipse(rect),
-        })
-    }
-
-    fn is_active(&self) -> bool {
-        self.start.is_some()
-    }
-}
-
-/// Freehand lasso selection.
-pub struct LassoTool {
-    points: Vec<Vec2>,
-}
-
-impl LassoTool {
-    /// A lasso with no points yet.
-    pub fn new() -> Self {
-        Self { points: Vec::new() }
-    }
-}
-
-impl Default for LassoTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Tool for LassoTool {
-    fn id(&self) -> ToolId {
-        ToolId::Lasso
-    }
-
-    fn pointer_down(&mut self, _ctx: &mut ToolContext, event: &ToolEvent) {
-        self.points.clear();
-        self.points.push(event.sample.position);
-    }
-
-    fn pointer_move(&mut self, _ctx: &mut ToolContext, event: &ToolEvent) {
-        if self.points.is_empty() {
-            return;
-        }
-        // Drop samples closer than a pixel; they add cost and no shape.
-        if self
-            .points
-            .last()
-            .map(|p| p.distance(event.sample.position) > 1.0)
-            .unwrap_or(true)
-        {
-            self.points.push(event.sample.position);
-        }
-    }
-
-    fn pointer_up(&mut self, ctx: &mut ToolContext, _event: &ToolEvent) {
-        if self.points.len() < 3 {
-            self.points.clear();
-            return;
-        }
-        let mut selection = ctx.doc.selection.clone();
-        selection.select_polygon(ctx.doc.width, ctx.doc.height, &self.points, ctx.selection_mode);
-        self.points.clear();
-        let command = SetSelectionCommand::new("Lasso Select", selection);
-        if let Err(err) = ctx.history.execute(ctx.doc, Box::new(command)) {
-            ctx.report(err.to_string());
-        }
-    }
-
-    fn cancel(&mut self, _ctx: &mut ToolContext) {
-        self.points.clear();
-    }
-
-    fn preview(&self) -> Option<ToolPreview> {
-        if self.points.len() < 2 {
-            return None;
-        }
-        Some(ToolPreview::Polyline(self.points.clone()))
-    }
-
-    fn is_active(&self) -> bool {
-        !self.points.is_empty()
-    }
-}
-
-/// Select by colour similarity.
-pub struct MagicWandTool;
-
-impl Tool for MagicWandTool {
-    fn id(&self) -> ToolId {
-        ToolId::MagicWand
-    }
-
-    fn pointer_down(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        let p = event.sample.position;
-        let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
-        if !ctx.doc.bounds().contains(x, y) {
-            return;
-        }
-        let source = if ctx.sample_all_layers {
-            ctx.composite.clone()
-        } else {
-            ctx.doc
-                .layers
-                .get(ctx.doc.active_layer)
-                .and_then(|l| l.pixmap())
-                .cloned()
-                .unwrap_or_else(|| Pixmap::new(ctx.doc.width, ctx.doc.height))
-        };
-        let mask = fill::flood_fill_mask(&source, x, y, ctx.tolerance);
-        if mask.is_empty() {
-            return;
-        }
-        let mut selection = ctx.doc.selection.clone();
-        selection.combine(mask, ctx.selection_mode);
-        let command = SetSelectionCommand::new("Magic Wand", selection);
-        if let Err(err) = ctx.history.execute(ctx.doc, Box::new(command)) {
-            ctx.report(err.to_string());
-        }
-    }
-
-    fn pointer_move(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {}
-
-    fn pointer_up(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {}
-}
-
-/// Move the active layer's pixels.
-pub struct MoveTool {
-    origin: Option<Vec2>,
-    source: Option<Pixmap>,
-    region: IRect,
-    layer: LayerId,
-    offset: (i32, i32),
-}
-
-impl MoveTool {
-    /// A move tool with no gesture in progress.
-    pub fn new() -> Self {
-        Self {
-            origin: None,
-            source: None,
-            region: IRect::EMPTY,
-            layer: LayerId::NONE,
-            offset: (0, 0),
-        }
-    }
-
-    fn apply_offset(&mut self, ctx: &mut ToolContext, dx: i32, dy: i32) {
-        let (Some(source), false) = (self.source.as_ref(), self.region.is_empty()) else {
-            return;
-        };
-        self.offset = (dx, dy);
-        let region = self.region;
-        let Ok(target) = ctx.doc.paint_target() else {
-            return;
-        };
-        // Clear the whole affected area, then stamp the content at its new place.
-        target.fill_rect(region, Rgba8::TRANSPARENT);
-        target.paste_rect(source, region.x + dx, region.y + dy);
-        ctx.doc.mark_dirty(region);
-    }
-}
-
-impl Default for MoveTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Tool for MoveTool {
-    fn id(&self) -> ToolId {
-        ToolId::Move
-    }
-
-    fn pointer_down(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        if let Err(err) = ctx.doc.paint_target() {
-            ctx.report(err.to_string());
-            return;
-        }
-        self.layer = ctx.doc.active_layer;
-        let content = ctx
-            .doc
-            .layers
-            .get(self.layer)
-            .and_then(|l| l.pixmap())
-            .map(|p| p.opaque_bounds())
-            .unwrap_or(IRect::EMPTY);
-        if content.is_empty() {
-            ctx.report("Layer is empty");
-            return;
-        }
-        // The affected region is where the content is now plus anywhere it can
-        // be dragged to, clipped to the canvas.
-        self.region = ctx.doc.bounds();
-        self.source = ctx
-            .doc
-            .layers
-            .get(self.layer)
-            .and_then(|l| l.pixmap())
-            .map(|p| p.copy_rect(self.region));
-        self.origin = Some(event.sample.position);
-        self.offset = (0, 0);
-    }
-
-    fn pointer_move(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        let Some(origin) = self.origin else {
-            return;
-        };
-        let delta = event.sample.position - origin;
-        self.apply_offset(ctx, delta.x.round() as i32, delta.y.round() as i32);
-    }
-
-    fn pointer_up(&mut self, ctx: &mut ToolContext, _event: &ToolEvent) {
-        let (Some(source), Some(_)) = (self.source.take(), self.origin.take()) else {
-            return;
-        };
-        let region = self.region;
-        if self.offset == (0, 0) || region.is_empty() {
-            return;
-        }
-        let after = ctx
-            .doc
-            .layers
-            .get(self.layer)
-            .and_then(|l| l.pixmap())
-            .map(|p| p.copy_rect(region))
-            .unwrap_or_else(|| Pixmap::new(region.width as u32, region.height as u32));
-        let edit = RegionEdit::new("Move Layer", self.layer, region, source, after);
-        if !edit.is_noop() {
-            ctx.history.push_applied(Box::new(edit));
-        }
-        self.region = IRect::EMPTY;
-    }
-
-    fn cancel(&mut self, ctx: &mut ToolContext) {
-        if let (Some(source), true) = (self.source.take(), !self.region.is_empty()) {
-            let region = self.region;
-            if let Ok(target) = ctx.doc.paint_target() {
-                target.paste_rect(&source, region.x, region.y);
-            }
-            ctx.doc.mark_dirty(region);
-        }
-        self.origin = None;
-        self.region = IRect::EMPTY;
-    }
-
-    fn is_active(&self) -> bool {
-        self.origin.is_some()
-    }
-}
-
-/// Drag the canvas.
-pub struct PanTool {
-    active: bool,
-}
-
-impl PanTool {
-    /// A pan tool with no gesture in progress.
-    pub fn new() -> Self {
-        Self { active: false }
-    }
-}
-
-impl Default for PanTool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Tool for PanTool {
-    fn id(&self) -> ToolId {
-        ToolId::Pan
-    }
-
-    fn pointer_down(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {
-        self.active = true;
-    }
-
-    fn pointer_move(&mut self, ctx: &mut ToolContext, event: &ToolEvent) {
-        if self.active {
-            ctx.viewport.pan_by_screen(event.screen_delta);
-        }
-    }
-
-    fn pointer_up(&mut self, _ctx: &mut ToolContext, _event: &ToolEvent) {
-        self.active = false;
-    }
-
-    fn is_active(&self) -> bool {
-        self.active
-    }
-}
-
 /// The set of available tools and which one is selected.
 ///
 /// Tools are boxed so a plugin can add one at runtime without this type
@@ -978,6 +354,8 @@ impl ToolBox {
             Box::new(LassoTool::new()),
             Box::new(MagicWandTool),
             Box::new(MoveTool::new()),
+            Box::new(TransformTool::new()),
+            Box::new(LiquifyTool::new()),
             Box::new(PanTool::new()),
         ];
         Self { tools, active: 0 }
@@ -1020,6 +398,16 @@ impl ToolBox {
         self.tools[index].as_mut()
     }
 
+    /// Push panel settings into the selected tool.
+    pub fn sync_settings(&mut self, settings: &ToolSettings) {
+        self.active_mut().sync_settings(settings);
+    }
+
+    /// True when the selected tool holds an uncommitted edit.
+    pub fn has_pending_edit(&self) -> bool {
+        self.active().is_pending()
+    }
+
     /// The selected tool, immutably.
     pub fn active(&self) -> &dyn Tool {
         let index = self.active.min(self.tools.len().saturating_sub(1));
@@ -1030,6 +418,8 @@ impl ToolBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aether_core::color::Rgba8;
+    use aether_core::math::IRect;
     use aether_raster::BrushPreset;
 
     struct Harness {
@@ -1374,6 +764,183 @@ mod tests {
         assert_eq!(tools.active_id(), ToolId::Eraser);
         assert!(!tools.select(ToolId::Custom("nope")));
         assert_eq!(tools.active_id(), ToolId::Eraser);
+    }
+
+    fn filled_square(h: &mut Harness, rect: IRect) {
+        if let Some(pm) = h
+            .doc
+            .layers
+            .get_mut(h.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill_rect(rect, Rgba8::WHITE);
+        }
+    }
+
+    #[test]
+    fn the_transform_tool_moves_content_and_commits_once() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(10, 10, 40, 40));
+        let mut tool = TransformTool::new();
+
+        // Grab the middle of the content, well clear of the edge handles.
+        drag(&mut tool, &mut h, &[(30.0, 30.0), (42.0, 30.0)]);
+        assert!(tool.is_pending(), "the transform stays live until confirmed");
+        assert_eq!(h.pixel(12, 30), Rgba8::TRANSPARENT, "content left its old place");
+        assert_ne!(h.pixel(42, 30), Rgba8::TRANSPARENT, "and arrived at the new one");
+        assert!(!h.history.can_undo(), "nothing is recorded before the commit");
+
+        {
+            let mut ctx = h.ctx();
+            tool.commit(&mut ctx);
+        }
+        assert_eq!(h.history.depth(), 1, "a whole transform session is one undo step");
+        h.history.undo(&mut h.doc).expect("undo");
+        assert_ne!(h.pixel(12, 30), Rgba8::TRANSPARENT, "undo puts the content back");
+    }
+
+    #[test]
+    fn cancelling_a_transform_restores_the_layer() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(10, 10, 40, 40));
+        let before = h
+            .doc
+            .layers
+            .get(h.doc.active_layer)
+            .and_then(|l| l.pixmap())
+            .cloned();
+        let mut tool = TransformTool::new();
+        drag(&mut tool, &mut h, &[(30.0, 30.0), (42.0, 42.0)]);
+        {
+            let mut ctx = h.ctx();
+            tool.cancel(&mut ctx);
+        }
+        assert_eq!(
+            h.doc
+                .layers
+                .get(h.doc.active_layer)
+                .and_then(|l| l.pixmap())
+                .cloned(),
+            before
+        );
+        assert!(!h.history.can_undo());
+    }
+
+    #[test]
+    fn dragging_a_transform_corner_scales_the_content() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(10, 10, 30, 30));
+        let mut tool = TransformTool::new();
+        // The content bounds are (10,10)-(40,40); drag the bottom-right corner out.
+        drag(&mut tool, &mut h, &[(40.0, 40.0), (58.0, 58.0)]);
+        {
+            let mut ctx = h.ctx();
+            tool.commit(&mut ctx);
+        }
+        assert_ne!(
+            h.pixel(52, 52),
+            Rgba8::TRANSPARENT,
+            "the shape should now reach further"
+        );
+        assert_ne!(
+            h.pixel(12, 12),
+            Rgba8::TRANSPARENT,
+            "the anchored corner stays put"
+        );
+    }
+
+    #[test]
+    fn an_empty_layer_cannot_be_transformed() {
+        let mut h = Harness::new();
+        let mut tool = TransformTool::new();
+        drag(&mut tool, &mut h, &[(20.0, 20.0), (30.0, 30.0)]);
+        assert!(!tool.is_pending());
+        assert!(!h.history.can_undo());
+    }
+
+    #[test]
+    fn warp_mode_offers_a_grid_of_handles() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(10, 10, 40, 40));
+        let mut tool = TransformTool::new();
+        drag(&mut tool, &mut h, &[(30.0, 30.0), (31.0, 30.0)]);
+        tool.sync_settings(&ToolSettings {
+            transform_mode: TransformMode::Warp,
+            ..Default::default()
+        });
+        match tool.preview() {
+            Some(ToolPreview::Grid { points, cols, rows }) => {
+                assert_eq!(points.len(), cols * rows);
+                assert!(cols >= 3 && rows >= 3, "a warp needs interior handles");
+            }
+            other => panic!("expected a warp grid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_liquify_brush_pushes_pixels_and_commits_once() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(20, 20, 24, 24));
+        let mut tool = LiquifyTool::new();
+        tool.sync_settings(&ToolSettings {
+            liquify_mode: LiquifyMode::Push,
+            liquify_radius: 30.0,
+            liquify_strength: 1.0,
+            ..Default::default()
+        });
+        drag(&mut tool, &mut h, &[(32.0, 32.0), (40.0, 32.0), (48.0, 32.0)]);
+
+        assert!(tool.is_pending());
+        assert_ne!(
+            h.pixel(46, 32),
+            Rgba8::TRANSPARENT,
+            "pixels should have been dragged right"
+        );
+        {
+            let mut ctx = h.ctx();
+            tool.commit(&mut ctx);
+        }
+        assert_eq!(h.history.depth(), 1, "a liquify session is one undo step");
+        h.history.undo(&mut h.doc).expect("undo");
+        assert_eq!(h.pixel(46, 32), Rgba8::TRANSPARENT);
+    }
+
+    #[test]
+    fn cancelling_liquify_restores_the_layer() {
+        let mut h = Harness::new();
+        filled_square(&mut h, IRect::new(20, 20, 24, 24));
+        let before = h
+            .doc
+            .layers
+            .get(h.doc.active_layer)
+            .and_then(|l| l.pixmap())
+            .cloned();
+        let mut tool = LiquifyTool::new();
+        tool.sync_settings(&ToolSettings {
+            liquify_strength: 1.0,
+            ..Default::default()
+        });
+        drag(&mut tool, &mut h, &[(32.0, 32.0), (44.0, 32.0)]);
+        {
+            let mut ctx = h.ctx();
+            tool.cancel(&mut ctx);
+        }
+        assert_eq!(
+            h.doc
+                .layers
+                .get(h.doc.active_layer)
+                .and_then(|l| l.pixmap())
+                .cloned(),
+            before
+        );
+    }
+
+    #[test]
+    fn the_toolbox_offers_the_phase_two_tools() {
+        let mut tools = ToolBox::standard();
+        assert!(tools.select(ToolId::Transform));
+        assert!(tools.select(ToolId::Liquify));
+        assert!(tools.ids().contains(&ToolId::Transform));
     }
 
     #[test]

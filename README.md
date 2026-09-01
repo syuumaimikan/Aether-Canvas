@@ -4,12 +4,14 @@ An integrated 2D creative environment written in Rust: painting, pixel art,
 vector work, 2D rigging, animation, motion graphics and compositing in one
 project, one document model and one timeline.
 
-> **Status: Phase 1 complete.** The application builds, runs, and is usable for
-> raster painting: layers, blend modes, masks, selections, a real brush engine,
-> full undo/redo, an open project format and image export. The later phases
-> (vector, pixel-art tooling, rigging, animation, VFX) are designed for but not
-> yet implemented — see [ROADMAP.md](ROADMAP.md) for exactly what exists today.
-> Nothing in this repository is a mock: if the UI offers it, it works.
+> **Status: Phases 0–2 complete.** The application builds, runs, and is usable
+> for real raster work: layers, groups, masks, 23 blend modes, selections, a
+> textured brush engine, non-destructive layer effects and adjustment layers, an
+> interactive transform tool, liquify, filters, full undo/redo, an open project
+> format and image export. The later phases (vector, pixel-art tooling, rigging,
+> animation, VFX) are designed for but not yet implemented — see
+> [ROADMAP.md](ROADMAP.md) for exactly what exists today. Nothing in this
+> repository is a mock: if the UI offers it, it works.
 
 ## What works today
 
@@ -23,10 +25,26 @@ project, one document model and one timeline.
 **Painting**
 - Dab-based brush engine with spacing, hardness, flow/opacity separation,
   scatter, jitter, elliptical tips and a stroke stabiliser
-- Pressure, tilt and speed input mapping (mouse input synthesises speed)
-- Six built-in presets; every parameter is editable and savable
+- Paper-grain textures and image-stamp (pattern) tips
+- Pressure from the pen where the platform reports it, with a speed-based
+  fallback and an off switch
+- Six built-in presets; save your own, and share them as plain JSON
 - Eraser, bucket fill, eyedropper, move, and rectangle/ellipse/lasso/wand
   selection tools
+
+**Non-destructive editing**
+- Per-layer effect stack: blur, motion blur, sharpen, glow, drop shadow,
+  outline, colour overlay, grain and any colour adjustment — reorderable,
+  toggleable, and stored as parameters rather than pixels
+- Adjustment layers with a real curve editor (levels, curves, hue/saturation,
+  exposure, gamma, colour balance, threshold, posterize and more)
+- The same kernels back the destructive Filter menu, so baking an effect gives
+  exactly the image you were looking at
+
+**Transforming**
+- One transform cage covering scale, rotate, skew, perspective distort and mesh
+  warp; Enter applies, Escape abandons, and the whole session is one undo step
+- Liquify brush: push, twirl, pinch, bloat and restore
 
 **Canvas**
 - GPU-accelerated view (wgpu) with pan, zoom, rotation, mirror and a pixel grid

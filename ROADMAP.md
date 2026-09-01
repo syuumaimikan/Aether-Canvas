@@ -20,19 +20,30 @@ soon" panel.
 - `.aether` save/load, PNG (and JPEG/WebP/TIFF/BMP/GIF) export
 - Three workspaces, three themes, English and Japanese, rebindable shortcuts
 
-## Phase 2 — Advanced painting 🚧 (partly done)
+## Phase 2 — Advanced painting ✅
 
-Done: 23 blend modes, groups (isolated and pass-through), layer masks, clipping
-layers, transparency lock, rectangle/ellipse/lasso/wand selections with
-add/subtract/intersect, feather/expand/contract, adjustment layers (levels,
-curves, hue/saturation, brightness/contrast, exposure, gamma, colour balance,
-invert, threshold, posterize, grayscale), gaussian blur and sharpen kernels.
+- 23 blend modes; groups (isolated and pass-through); layer masks; clipping
+  layers; transparency lock
+- Rectangle, ellipse, lasso and wand selections with add / subtract / intersect,
+  feather, expand and contract
+- Adjustment layers with an interactive curve editor: levels, curves,
+  hue/saturation, brightness/contrast, exposure, gamma, colour balance, invert,
+  threshold, posterize, grayscale
+- Non-destructive per-layer effect stack: blur, motion blur, sharpen, glow, drop
+  shadow, outline, colour overlay, grain, and any adjustment
+- Destructive Filter menu sharing the same kernels
+- Interactive transform tool: move, scale, rotate, skew, perspective distort and
+  mesh warp, with modal apply/cancel
+- Liquify brush: push, twirl, pinch, bloat, restore
+- Textured brushes (procedural or image grain) and image-stamp pattern tips
+- Brush presets saved and shared as plain JSON
+- Pressure from the device where the platform reports it, with a speed-derived
+  fallback and an off switch
 
-Remaining:
-- Platform tablet plumbing for real pressure, tilt and barrel rotation
-- Textured, pattern and dual brushes; brush preset import/export
-- Interactive transform tool (scale, rotate, skew, perspective, warp, liquify)
-- Filter gallery in the UI, and filters as non-destructive layer effects
+Carried forward: desktop tablet APIs that `winit` does not expose yet (Wintab on
+Windows, and Windows Ink) still fall back to the speed mapping; dual-tip brushes
+and non-destructive *filter* layers (as opposed to per-layer effects) are not
+implemented.
 
 ## Phase 3 — Pixel art
 

@@ -107,6 +107,10 @@ Four cases need more than a blend:
 - **Adjustment layers** — evaluated against the current backdrop and blended
   back in, which is what makes them non-destructive and maskable.
 
+A layer's own **effect stack** runs between producing its content and blending
+it in, so a drop shadow lands behind its layer but in front of everything below
+it, and the layer's opacity and mask still apply to the finished result.
+
 The CPU compositor is the reference implementation. Export and the canvas use
 the same code, so what an artist sees is what gets saved. The GPU render graph
 planned for Phase 8 will be validated against it.
@@ -143,6 +147,20 @@ from the pre-stroke tiles plus the whole accumulated stroke. That is what makes
 stroke), and what stops a stroke that crosses itself from darkening at the
 crossing.
 
+## 5b. Transforming and deforming
+
+Scale, rotate, skew, perspective distort and warp are one tool with one
+representation — a destination quad — and one resampler: the homography that
+maps the layer's content rectangle onto that quad
+(`Perspective::from_quads`), optionally followed by a displacement field. A
+"free" transform is simply a drag rule that keeps the quad a parallelogram, so
+free and perspective modes cannot drift apart.
+
+Liquify shares the displacement field. Both tools are *modal*: they keep the
+original pixels aside, rebuild the layer from them on every gesture (which is
+also what stops repeated passes from compounding resampling blur), and write a
+single undo entry when the artist confirms.
+
 ## 6. Undo
 
 Every edit is a `Command` that can apply and reverse itself, stored in two
@@ -156,6 +174,7 @@ stacks. Commands keep the minimum state that makes both directions exact:
 | `SetLayerProperty` | old and new value, and coalesces across a slider drag |
 | `SetLayerMask`, `SetSelection` | old and new buffers |
 | `ResizeCanvas` | the pixels cropping would discard |
+| `SetLayerEffects`, `SetAdjustment` | the whole stack / the adjustment, before and after, coalescing across a drag |
 | `Transaction` | a batch that applies and reverses as one, rolling back on failure |
 
 Interactive tools paint live and only build their command when the gesture
@@ -194,7 +213,7 @@ These exist now, so later phases plug in rather than rewrite:
 | Risk | Mitigation |
 | --- | --- |
 | CPU compositing will not scale to 8K canvases with dozens of layers | Tile-granular dirty tracking is already in place; Phase 8 moves the composite to a GPU render graph behind the same interface, with the CPU path kept as the reference |
-| Stylus pressure is not exposed by the windowing stack today | `InputSample` already carries pressure/tilt/velocity; the UI synthesises velocity, and platform tablet plumbing is a contained Phase 2 task |
+| Desktop tablet APIs (Wintab, Windows Ink) are not exposed by `winit` | `InputSample` carries pressure/tilt/velocity throughout; the UI uses the device force `winit` *does* forward for touch-style digitisers, and offers a speed-derived fallback. Adding a platform backend later changes one function, not the pipeline |
 | Undo memory growth on large canvases | Commands store rectangles and tiles, not layers; the history has a bounded depth |
 | A single enum of layer types would block plugins | `LayerContent::Custom` preserves unknown content across save/load |
 | File-format lock-in | Open container, documented schema, versioned with a migration hook |

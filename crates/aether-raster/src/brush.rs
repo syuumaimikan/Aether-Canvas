@@ -28,6 +28,97 @@ pub enum BrushTip {
     Round,
     /// Hard-edged square tip (pixel art, calligraphy).
     Square,
+    /// An arbitrary shape sampled from a coverage image.
+    ///
+    /// This is what makes a *pattern brush*: the dab is whatever the artist
+    /// drew or imported, scaled to the brush size and rotated with the tip.
+    Stamp(crate::mask::Mask),
+}
+
+/// Where a brush texture's grain comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TexturePattern {
+    /// Procedural grain; cheap, and needs no asset to travel with the preset.
+    Noise {
+        /// Seed, so the grain is stable across strokes, undo and reloads.
+        seed: u64,
+    },
+    /// A tiled coverage image, e.g. scanned paper or canvas weave.
+    Custom(crate::mask::Mask),
+}
+
+/// Paper-like grain modulating how much paint a dab lays down.
+///
+/// The texture is evaluated in **canvas space**, not dab space, so the grain
+/// stays fixed to the paper as the brush travels over it — the behaviour that
+/// makes a textured brush read as a physical medium rather than as a pattern
+/// stuck to the cursor.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrushTexture {
+    /// The grain source.
+    pub pattern: TexturePattern,
+    /// Size of one grain cell (or one tile of the custom image) in pixels.
+    pub scale: f32,
+    /// How strongly the grain bites, `0..=1`.
+    pub strength: f32,
+}
+
+impl Default for BrushTexture {
+    fn default() -> Self {
+        Self {
+            pattern: TexturePattern::Noise { seed: 1 },
+            scale: 6.0,
+            strength: 0.5,
+        }
+    }
+}
+
+impl BrushTexture {
+    /// The coverage multiplier at a canvas pixel, in `0..=1`.
+    pub fn coverage_at(&self, x: i32, y: i32) -> f32 {
+        let strength = self.strength.clamp(0.0, 1.0);
+        if strength <= 0.0 {
+            return 1.0;
+        }
+        let scale = self.scale.max(0.5);
+        let value = match &self.pattern {
+            TexturePattern::Noise { seed } => {
+                // Bilinear value noise: smoother than per-pixel hashing, and
+                // still O(1) with no stored buffer.
+                let fx = x as f32 / scale;
+                let fy = y as f32 / scale;
+                let (x0, y0) = (fx.floor(), fy.floor());
+                let (tx, ty) = (fx - x0, fy - y0);
+                let (x0, y0) = (x0 as i64, y0 as i64);
+                let n = |cx: i64, cy: i64| texture_noise(cx, cy, *seed);
+                let top = n(x0, y0) + (n(x0 + 1, y0) - n(x0, y0)) * tx;
+                let bottom = n(x0, y0 + 1) + (n(x0 + 1, y0 + 1) - n(x0, y0 + 1)) * tx;
+                top + (bottom - top) * ty
+            }
+            TexturePattern::Custom(mask) => {
+                if mask.width() == 0 || mask.height() == 0 {
+                    return 1.0;
+                }
+                let tile_w = (mask.width() as f32 * scale / 32.0).max(1.0);
+                let tile_h = (mask.height() as f32 * scale / 32.0).max(1.0);
+                let u = (x as f32 / tile_w).rem_euclid(1.0) * mask.width() as f32;
+                let v = (y as f32 / tile_h).rem_euclid(1.0) * mask.height() as f32;
+                mask.get(u as i32, v as i32) as f32 / 255.0
+            }
+        };
+        1.0 - strength * (1.0 - value.clamp(0.0, 1.0))
+    }
+}
+
+/// Deterministic value noise in `0..=1`.
+fn texture_noise(x: i64, y: i64, seed: u64) -> f32 {
+    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ seed;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    ((h >> 40) as f32) / 16_777_216.0
 }
 
 /// How live input drives brush parameters.
@@ -92,6 +183,9 @@ pub struct BrushPreset {
     pub scatter: f32,
     /// Random per-dab size variation, `0..=1`.
     pub size_jitter: f32,
+    /// Optional paper grain.
+    #[serde(default)]
+    pub texture: Option<BrushTexture>,
     /// How the stroke is combined with the layer.
     pub blend: BlendMode,
     /// Input mapping.
@@ -114,6 +208,7 @@ impl Default for BrushPreset {
             roundness: 1.0,
             scatter: 0.0,
             size_jitter: 0.0,
+            texture: None,
             blend: BlendMode::Normal,
             dynamics: BrushDynamics::default(),
             smoothing: 0.35,
@@ -197,6 +292,11 @@ impl BrushPreset {
                 spacing: 0.1,
                 scatter: 0.15,
                 size_jitter: 0.25,
+                texture: Some(BrushTexture {
+                    pattern: TexturePattern::Noise { seed: 24 },
+                    scale: 5.0,
+                    strength: 0.6,
+                }),
                 dynamics: BrushDynamics {
                     size_pressure: 0.5,
                     flow_pressure: 0.7,
@@ -294,7 +394,13 @@ impl BrushEngine {
     /// Returns the touched rectangle. Coverage accumulates as source-over
     /// (`a' = a + f(1-a)`) so repeated dabs at low flow build up smoothly and
     /// a full-flow dab saturates immediately.
-    pub fn stamp(buffer: &mut Mask, dab: &Dab, tip: &BrushTip, hardness: f32) -> IRect {
+    pub fn stamp(
+        buffer: &mut Mask,
+        dab: &Dab,
+        tip: &BrushTip,
+        hardness: f32,
+        texture: Option<&BrushTexture>,
+    ) -> IRect {
         let radius = (dab.size * 0.5).max(0.0);
         if radius <= 0.0 || dab.flow <= 0.0 {
             return IRect::EMPTY;
@@ -324,12 +430,19 @@ impl BrushEngine {
                 let rx = dx * cos_a - dy * sin_a;
                 let ry = (dx * sin_a + dy * cos_a) * inv_roundness;
 
-                let coverage = match tip {
+                let mut coverage = match tip {
                     BrushTip::Round => round_coverage(rx, ry, radius, hardness),
                     BrushTip::Square => square_coverage(rx, ry, radius),
+                    BrushTip::Stamp(shape) => stamp_coverage(shape, rx, ry, radius),
                 };
                 if coverage <= 0.0 {
                     continue;
+                }
+                if let Some(texture) = texture {
+                    coverage *= texture.coverage_at(x, y);
+                    if coverage <= 0.0 {
+                        continue;
+                    }
                 }
                 let add = coverage * flow;
                 let prev = buffer.get(x, y) as f32 / 255.0;
@@ -362,6 +475,23 @@ fn round_coverage(rx: f32, ry: f32, radius: f32, hardness: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         1.0 - (t * t * (3.0 - 2.0 * t))
     }
+}
+
+/// Coverage sampled from a stamp image, scaled to the dab and bilinearly filtered.
+fn stamp_coverage(shape: &Mask, rx: f32, ry: f32, radius: f32) -> f32 {
+    if shape.width() == 0 || shape.height() == 0 || radius <= 0.0 {
+        return 0.0;
+    }
+    // Map dab space (-radius..radius) onto the image.
+    let u = (rx / radius * 0.5 + 0.5) * shape.width() as f32 - 0.5;
+    let v = (ry / radius * 0.5 + 0.5) * shape.height() as f32 - 0.5;
+    let (x0, y0) = (u.floor(), v.floor());
+    let (tx, ty) = (u - x0, v - y0);
+    let (x0, y0) = (x0 as i32, y0 as i32);
+    let at = |x: i32, y: i32| shape.get(x, y) as f32 / 255.0;
+    let top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx;
+    let bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+    (top + (bottom - top) * ty).clamp(0.0, 1.0)
 }
 
 /// Hard square falloff with a single antialiased pixel at the border.
@@ -552,7 +682,13 @@ impl StrokeState {
             roundness,
         };
         self.dab_count += 1;
-        BrushEngine::stamp(&mut self.buffer, &dab, &self.preset.tip, self.preset.hardness)
+        BrushEngine::stamp(
+            &mut self.buffer,
+            &dab,
+            &self.preset.tip,
+            self.preset.hardness,
+            self.preset.texture.as_ref(),
+        )
     }
 
     /// Finish the stroke and hand back the accumulated coverage.
@@ -579,7 +715,7 @@ mod tests {
             angle: 0.0,
             roundness: 1.0,
         };
-        let rect = BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0);
+        let rect = BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0, None);
         assert!(!rect.is_empty());
         assert_eq!(mask.get(16, 16), 255);
         assert_eq!(mask.get(31, 31), 0);
@@ -595,7 +731,7 @@ mod tests {
             angle: 0.0,
             roundness: 1.0,
         };
-        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 0.0);
+        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 0.0, None);
         let centre = mask.get(32, 32);
         let mid = mask.get(32 + 14, 32);
         assert!(centre > 250, "centre should be near-solid, got {centre}");
@@ -615,7 +751,7 @@ mod tests {
             angle: 0.0,
             roundness: 1.0,
         };
-        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Square, 1.0);
+        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Square, 1.0, None);
         assert_eq!(mask.get(4, 4), 255);
         assert_eq!(mask.get(5, 4), 0);
         assert_eq!(mask.get(3, 4), 0);
@@ -631,13 +767,13 @@ mod tests {
             angle: 0.0,
             roundness: 1.0,
         };
-        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0);
+        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0, None);
         let first = mask.get(8, 8);
-        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0);
+        BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0, None);
         let second = mask.get(8, 8);
         assert!(second > first, "flow should build up: {first} -> {second}");
         for _ in 0..20 {
-            BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0);
+            BrushEngine::stamp(&mut mask, &dab, &BrushTip::Round, 1.0, None);
         }
         assert_eq!(mask.get(8, 8), 255);
     }
@@ -740,5 +876,109 @@ mod tests {
             preset.sanitize();
             assert_eq!(before, preset, "preset {} needed clamping", preset.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+    use aether_core::math::IRect;
+
+    fn dab(size: f32) -> Dab {
+        Dab {
+            center: Vec2::new(32.0, 32.0),
+            size,
+            flow: 1.0,
+            angle: 0.0,
+            roundness: 1.0,
+        }
+    }
+
+    #[test]
+    fn noise_texture_breaks_up_solid_coverage() {
+        let texture = BrushTexture {
+            pattern: TexturePattern::Noise { seed: 3 },
+            scale: 4.0,
+            strength: 1.0,
+        };
+        let mut plain = Mask::new(64, 64);
+        let mut grainy = Mask::new(64, 64);
+        BrushEngine::stamp(&mut plain, &dab(30.0), &BrushTip::Round, 1.0, None);
+        BrushEngine::stamp(&mut grainy, &dab(30.0), &BrushTip::Round, 1.0, Some(&texture));
+        assert_ne!(plain, grainy, "the texture should change coverage");
+        assert!(grainy.get(32, 32) <= plain.get(32, 32));
+    }
+
+    #[test]
+    fn texture_is_fixed_to_the_canvas_not_the_dab() {
+        let texture = BrushTexture {
+            pattern: TexturePattern::Noise { seed: 5 },
+            scale: 8.0,
+            strength: 1.0,
+        };
+        // The same canvas pixel must get the same grain regardless of where the
+        // dab that covers it was centred.
+        let a = texture.coverage_at(40, 40);
+        let b = texture.coverage_at(40, 40);
+        assert_eq!(a, b);
+        assert_ne!(texture.coverage_at(40, 40), texture.coverage_at(41, 96));
+    }
+
+    #[test]
+    fn zero_strength_texture_is_transparent_to_the_engine() {
+        let texture = BrushTexture {
+            strength: 0.0,
+            ..Default::default()
+        };
+        assert_eq!(texture.coverage_at(3, 9), 1.0);
+    }
+
+    #[test]
+    fn a_stamp_tip_takes_the_shape_of_its_image() {
+        // A shape covering only the left half of its image.
+        let mut shape = Mask::new(16, 16);
+        shape.fill_rect(IRect::new(0, 0, 8, 16), 255);
+        let mut mask = Mask::new(64, 64);
+        BrushEngine::stamp(&mut mask, &dab(32.0), &BrushTip::Stamp(shape), 1.0, None);
+        assert!(mask.get(24, 32) > 200, "left half should be covered");
+        assert_eq!(mask.get(44, 32), 0, "right half should be empty");
+    }
+
+    #[test]
+    fn an_empty_stamp_paints_nothing() {
+        let mut mask = Mask::new(32, 32);
+        BrushEngine::stamp(
+            &mut mask,
+            &dab(16.0),
+            &BrushTip::Stamp(Mask::new(0, 0)),
+            1.0,
+            None,
+        );
+        assert!(mask.is_empty());
+    }
+
+    #[test]
+    fn presets_with_textures_survive_serde() {
+        for preset in BrushPreset::builtin() {
+            let text = serde_json::to_string(&preset).expect("serialize");
+            let back: BrushPreset = serde_json::from_str(&text).expect("deserialize");
+            assert_eq!(back, preset);
+        }
+    }
+
+    #[test]
+    fn presets_saved_before_textures_existed_still_load() {
+        // `texture` is a later addition; older presets simply omit the field.
+        let legacy = r#"{
+            "name": "Old", "tip": "Round", "size": 10.0, "opacity": 1.0, "flow": 1.0,
+            "hardness": 0.8, "spacing": 0.1, "angle": 0.0, "roundness": 1.0,
+            "scatter": 0.0, "size_jitter": 0.0, "blend": "Normal",
+            "dynamics": {"size_pressure":1.0,"flow_pressure":0.0,"opacity_pressure":0.0,
+                         "size_velocity":0.0,"size_min":0.05,"flow_min":0.0,"tilt_elongation":0.0},
+            "smoothing": 0.3
+        }"#;
+        let preset: BrushPreset = serde_json::from_str(legacy).expect("legacy preset should load");
+        assert_eq!(preset.name, "Old");
+        assert!(preset.texture.is_none());
     }
 }

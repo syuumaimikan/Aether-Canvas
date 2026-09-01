@@ -2,7 +2,7 @@
 //!
 //! Two things this demonstrates:
 //!
-//! * the whole pipeline (document → brush → compositor → encoder) works
+//! * the whole pipeline (document → brush → effects → compositor → encoder) works
 //!   without a GPU or a display, which is what makes it testable in CI;
 //! * the public API is usable as a library, so batch jobs and, later, plugins
 //!   and scripts can drive the same code the UI does.
@@ -21,6 +21,7 @@ use aether_document::layer::Layer;
 use aether_document::{Background, Document};
 use aether_raster::adjust::Adjustment;
 use aether_raster::composite::{fill_masked, CompositeOptions};
+use aether_raster::effect::{EffectKind, LayerEffect};
 use aether_raster::{BrushPreset, StrokeState};
 use aether_render::Compositor;
 
@@ -44,6 +45,24 @@ fn main() -> aether_core::Result<()> {
     if let Some(layer) = doc.layers.get_mut(accent) {
         layer.blend_mode = BlendMode::Multiply;
         layer.opacity = 0.85;
+    }
+
+    // Non-destructive layer effects: the stroke's own pixels are untouched.
+    if let Some(layer) = doc.layers.get_mut(base) {
+        layer.effects = vec![
+            LayerEffect::new(EffectKind::DropShadow {
+                dx: 10.0,
+                dy: 12.0,
+                radius: 8.0,
+                color: Rgba8::rgb(20, 30, 60),
+                opacity: 0.45,
+            }),
+            LayerEffect::new(EffectKind::Glow {
+                radius: 16.0,
+                intensity: 0.8,
+                color: Rgba8::rgb(120, 190, 255),
+            }),
+        ];
     }
 
     // A non-destructive adjustment on top of everything.

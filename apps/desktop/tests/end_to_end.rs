@@ -10,6 +10,8 @@ use aether_core::math::{IRect, Vec2};
 use aether_document::command::LayerProperty;
 use aether_document::selection::SelectionMode;
 use aether_document::Document;
+use aether_raster::adjust::Adjustment;
+use aether_raster::effect::{EffectKind, LayerEffect};
 use aether_ui::shortcuts::Action;
 use aether_ui::state::{PointerPhase, Workspace};
 use aether_ui::tools::{ToolEvent, ToolId};
@@ -232,4 +234,185 @@ fn a_locked_layer_survives_every_painting_tool() {
     }
     assert_eq!(layer_pixel(&state, 20, 20), Rgba8::TRANSPARENT);
     assert!(!state.history.can_undo(), "nothing should have been recorded");
+}
+
+#[test]
+fn a_non_destructive_effect_stack_survives_save_and_reload() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("effects.aether");
+
+    let mut state = new_state(96);
+    state.primary = Rgba::rgb(0.9, 0.9, 0.9);
+    stroke(&mut state, &[(30.0, 48.0), (66.0, 48.0)]);
+
+    let id = state.doc.active_layer;
+    state
+        .set_layer_effects(
+            id,
+            vec![
+                LayerEffect::new(EffectKind::Glow {
+                    radius: 8.0,
+                    intensity: 1.5,
+                    color: Rgba8::rgb(255, 100, 0),
+                }),
+                LayerEffect::new(EffectKind::Adjust {
+                    adjustment: Adjustment::Invert,
+                }),
+            ],
+            "Add Effects",
+        )
+        .expect("effects");
+
+    let with_effects = state.compositor.render(&state.doc);
+    state.save_as(&project).expect("save");
+
+    let mut reopened = new_state(8);
+    reopened.open_project(&project).expect("open");
+    assert_eq!(
+        reopened.doc.layers.get(id).map(|l| l.effects.len()),
+        Some(2),
+        "the stack must survive the round trip"
+    );
+    assert_eq!(reopened.compositor.render(&reopened.doc), with_effects);
+
+    // And the pixels underneath are still the untouched stroke.
+    reopened
+        .set_layer_effects(id, Vec::new(), "Clear Effects")
+        .expect("clear");
+    let bare = reopened.compositor.render(&reopened.doc);
+    assert_ne!(bare, with_effects, "removing the effects must change the render");
+}
+
+#[test]
+fn an_adjustment_layer_edits_everything_below_it_and_undoes_cleanly() {
+    let mut state = new_state(64);
+    if let Some(pm) = state
+        .doc
+        .layers
+        .get_mut(state.doc.active_layer)
+        .and_then(|l| l.pixmap_mut())
+    {
+        pm.fill(Rgba8::rgb(40, 80, 120));
+    }
+    state
+        .add_adjustment_layer(Adjustment::Invert)
+        .expect("adjustment");
+    state.cache.invalidate();
+    state.refresh();
+    assert_eq!(state.composite().get(10, 10), Rgba8::rgb(215, 175, 135));
+
+    state.history.undo(&mut state.doc).expect("undo");
+    state.cache.invalidate();
+    state.refresh();
+    assert_eq!(state.composite().get(10, 10), Rgba8::rgb(40, 80, 120));
+}
+
+#[test]
+fn a_transform_session_is_a_single_undo_step() {
+    let mut state = new_state(96);
+    if let Some(pm) = state
+        .doc
+        .layers
+        .get_mut(state.doc.active_layer)
+        .and_then(|l| l.pixmap_mut())
+    {
+        pm.fill_rect(IRect::new(20, 20, 40, 40), Rgba8::WHITE);
+    }
+    state.select_tool(ToolId::Transform);
+    // Two separate drags, then confirm.
+    stroke(&mut state, &[(40.0, 40.0), (50.0, 40.0)]);
+    stroke(&mut state, &[(50.0, 40.0), (50.0, 55.0)]);
+    assert!(state.has_pending_tool_edit());
+    state.commit_tool();
+
+    assert_eq!(state.history.depth(), 1, "the whole session is one entry");
+    assert_eq!(
+        layer_pixel(&state, 22, 22),
+        Rgba8::TRANSPARENT,
+        "content moved away"
+    );
+    state.history.undo(&mut state.doc).expect("undo");
+    assert_eq!(
+        layer_pixel(&state, 22, 22),
+        Rgba8::WHITE,
+        "and undo brings it back"
+    );
+}
+
+#[test]
+fn liquify_deforms_pixels_and_can_be_abandoned() {
+    let mut state = new_state(96);
+    if let Some(pm) = state
+        .doc
+        .layers
+        .get_mut(state.doc.active_layer)
+        .and_then(|l| l.pixmap_mut())
+    {
+        pm.fill_rect(IRect::new(30, 30, 30, 30), Rgba8::WHITE);
+    }
+    let before = state
+        .doc
+        .layers
+        .get(state.doc.active_layer)
+        .and_then(|l| l.pixmap())
+        .cloned();
+
+    state.select_tool(ToolId::Liquify);
+    state.tool_settings.liquify_radius = 40.0;
+    state.tool_settings.liquify_strength = 1.0;
+    stroke(&mut state, &[(45.0, 45.0), (60.0, 45.0), (72.0, 45.0)]);
+    assert!(state.has_pending_tool_edit());
+    assert_ne!(
+        state
+            .doc
+            .layers
+            .get(state.doc.active_layer)
+            .and_then(|l| l.pixmap())
+            .cloned(),
+        before,
+        "the layer should be deformed"
+    );
+
+    state.cancel_tool();
+    assert_eq!(
+        state
+            .doc
+            .layers
+            .get(state.doc.active_layer)
+            .and_then(|l| l.pixmap())
+            .cloned(),
+        before,
+        "cancelling restores the original pixels"
+    );
+    assert!(!state.history.can_undo(), "an abandoned session records nothing");
+}
+
+#[test]
+fn a_filter_and_an_effect_produce_the_same_pixels() {
+    // The destructive filter path and the non-destructive stack share their
+    // kernels; if they ever diverge, an artist baking an effect would get a
+    // different image than the one they were looking at.
+    let mut destructive = new_state(64);
+    let mut layered = new_state(64);
+    for state in [&mut destructive, &mut layered] {
+        if let Some(pm) = state
+            .doc
+            .layers
+            .get_mut(state.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill_rect(IRect::new(16, 16, 24, 24), Rgba8::rgb(200, 120, 60));
+        }
+    }
+
+    let kind = EffectKind::Blur { sigma: 3.0 };
+    destructive.apply_filter(kind.clone()).expect("filter");
+    let id = layered.doc.active_layer;
+    layered
+        .set_layer_effects(id, vec![LayerEffect::new(kind)], "Blur")
+        .expect("effect");
+
+    let baked = destructive.compositor.render(&destructive.doc);
+    let live = layered.compositor.render(&layered.doc);
+    assert_eq!(baked, live);
 }

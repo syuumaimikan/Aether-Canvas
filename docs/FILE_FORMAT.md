@@ -46,6 +46,7 @@ project.aether
         "clipping": false,
         "mask_enabled": true,
         "color_label": "None",
+        "effects": [],
         "mask": null,
         "content": { "Raster": { "data": "layers/1.png" } }
       }
@@ -67,6 +68,12 @@ own `children` list in the same order.
 | `Adjustment` | `adjustment`: the operation and its parameters |
 | `Fill` | `color` |
 | `Custom` | `kind` (reverse-DNS tag) and an opaque `payload` |
+
+Every layer also carries an `effects` array: the non-destructive effect stack,
+stored as parameters (`{"kind": {"Blur": {"sigma": 4.0}}, "enabled": true}`)
+rather than as rendered pixels. The field was added after schema version 1
+shipped, so files written by an older build simply omit it and load with an
+empty stack.
 
 `Custom` is how plugin content survives a round trip through a build that does
 not have the plugin: the tag and payload are stored and restored verbatim, and

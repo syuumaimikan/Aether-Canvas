@@ -12,22 +12,28 @@
 //! * [`composite`] – blending one buffer onto another.
 //! * [`brush`] – the dab-based brush engine (spacing, dynamics, hardness).
 //! * [`fill`] – flood fill.
-//! * [`transform`] – affine resampling.
+//! * [`transform`] – affine and perspective resampling.
+//! * [`warp`] – free-form deformation for the warp handles and liquify.
 //! * [`adjust`] – colour adjustment kernels shared by adjustment layers and filters.
-//! * [`filter`] – separable blur and sharpen kernels.
+//! * [`filter`] – blur, sharpen, motion blur, grain and silhouette kernels.
+//! * [`effect`] – the non-destructive layer effect stack.
 
 pub mod adjust;
 pub mod brush;
 pub mod composite;
+pub mod effect;
 pub mod fill;
 pub mod filter;
 pub mod mask;
 pub mod pixmap;
 pub mod tile;
 pub mod transform;
+pub mod warp;
 
 pub use brush::{BrushDynamics, BrushEngine, BrushPreset, BrushTip, StrokeState};
 pub use composite::{composite_pixmap, CompositeOptions};
+pub use effect::{EffectKind, LayerEffect};
 pub use mask::Mask;
 pub use pixmap::Pixmap;
 pub use tile::{DirtyRegion, TileIter, TILE_SIZE};
+pub use warp::DisplacementField;

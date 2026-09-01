@@ -9,21 +9,24 @@
 use crate::i18n::Language;
 use crate::shortcuts::{Action, ShortcutMap};
 use crate::theme::Theme;
-use crate::tools::{ToolBox, ToolContext, ToolEvent, ToolId};
+use crate::tools::{ToolBox, ToolContext, ToolEvent, ToolId, ToolSettings};
 use aether_core::blend::BlendMode;
 use aether_core::color::{Rgba, Rgba8};
 use aether_core::math::IRect;
 use aether_core::{AetherError, LayerId, Result};
+use aether_document::command::SetAdjustmentCommand;
 use aether_document::command::{
     AddLayerCommand, DeleteLayerCommand, LayerProperty, MoveLayerCommand, RegionEdit, ResizeCanvasCommand,
-    SetLayerMaskCommand, SetLayerPropertyCommand, SetSelectionCommand, Transaction,
+    SetLayerEffectsCommand, SetLayerMaskCommand, SetLayerPropertyCommand, SetSelectionCommand, Transaction,
 };
 use aether_document::layer::{Layer, LayerContent};
 use aether_document::selection::{Selection, SelectionMode};
 use aether_document::{Document, History};
 use aether_io::project;
 use aether_io::{ExportSettings, ImageFormat};
+use aether_raster::adjust::Adjustment;
 use aether_raster::composite::{composite_pixmap, CompositeOptions};
+use aether_raster::effect::{EffectKind, LayerEffect};
 use aether_raster::transform::Interpolation;
 use aether_raster::{BrushPreset, Mask, Pixmap};
 use aether_render::{Compositor, RenderCache, Viewport};
@@ -63,6 +66,57 @@ impl Workspace {
     }
 }
 
+/// Where a stroke's pressure values come from.
+///
+/// Windowing stacks differ in what they expose. `winit` forwards a touch
+/// device's force, which is what a pen reports on iPadOS and on Windows/Wayland
+/// digitisers that present as touch — so [`PressureSource::Device`] is real
+/// pressure where the platform provides it. Tablets that only speak Wintab or
+/// the Windows Ink API do not reach us yet, so [`PressureSource::Speed`] gives
+/// a usable taper from stroke velocity, and [`PressureSource::Off`] disables
+/// dynamics entirely.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PressureSource {
+    /// Use the device's reported force, falling back to full pressure.
+    #[default]
+    Device,
+    /// Derive pressure from how fast the pointer is moving.
+    Speed,
+    /// Always full pressure.
+    Off,
+}
+
+impl PressureSource {
+    /// All sources, in menu order.
+    pub const ALL: [PressureSource; 3] = [PressureSource::Device, PressureSource::Speed, PressureSource::Off];
+
+    /// Translation key for the source's name.
+    pub fn key(self) -> &'static str {
+        match self {
+            PressureSource::Device => "pressure.device",
+            PressureSource::Speed => "pressure.speed",
+            PressureSource::Off => "pressure.off",
+        }
+    }
+
+    /// Resolve a pressure value for one input sample.
+    ///
+    /// `device` is the force the platform reported, if any; `speed` is the
+    /// pointer's speed in document pixels per second.
+    pub fn resolve(self, device: Option<f32>, speed: f32) -> f32 {
+        match self {
+            PressureSource::Device => device.unwrap_or(1.0).clamp(0.0, 1.0),
+            PressureSource::Speed => {
+                // Fast strokes read as light. The knee is around 900 px/s,
+                // which is a brisk but not frantic pen movement.
+                let t = (speed / 900.0).clamp(0.0, 1.0);
+                (1.0 - 0.75 * t).clamp(0.25, 1.0)
+            }
+            PressureSource::Off => 1.0,
+        }
+    }
+}
+
 /// The whole application state.
 pub struct EditorState {
     /// The document being edited.
@@ -77,6 +131,10 @@ pub struct EditorState {
     pub viewport: Viewport,
     /// Available tools and the active one.
     pub tools: ToolBox,
+    /// Settings the tool-options panel edits.
+    pub tool_settings: ToolSettings,
+    /// Where stroke pressure comes from.
+    pub pressure_source: PressureSource,
     /// The brush the paint tools use.
     pub brush: BrushPreset,
     /// Saved brush presets.
@@ -133,6 +191,8 @@ impl EditorState {
             cache: RenderCache::new(),
             viewport: Viewport::default(),
             tools: ToolBox::standard(),
+            tool_settings: ToolSettings::default(),
+            pressure_source: PressureSource::default(),
             brush,
             brush_presets: presets,
             primary: Rgba::BLACK,
@@ -195,8 +255,32 @@ impl EditorState {
 
     // ---------------------------------------------------------------- tools
 
-    /// Send a pointer event to the active tool.
-    pub fn tool_pointer(&mut self, phase: PointerPhase, event: &ToolEvent) {
+    /// Push the tool-options settings into the active tool.
+    ///
+    /// Called once per frame so a modal tool picks up a mode change made in
+    /// the panel while its gesture is still live.
+    pub fn sync_tools(&mut self) {
+        let settings = self.tool_settings;
+        self.tools.sync_settings(&settings);
+    }
+
+    /// True when the active tool is holding an edit that Enter would apply.
+    pub fn has_pending_tool_edit(&self) -> bool {
+        self.tools.has_pending_edit()
+    }
+
+    /// Apply the active tool's pending edit.
+    pub fn commit_tool(&mut self) {
+        self.with_tool(|tool, ctx| tool.commit(ctx));
+    }
+
+    /// Discard the active tool's pending edit.
+    pub fn cancel_tool(&mut self) {
+        self.with_tool(|tool, ctx| tool.cancel(ctx));
+    }
+
+    /// Run `f` with the active tool and a context borrowing the rest of state.
+    fn with_tool(&mut self, f: impl FnOnce(&mut dyn crate::tools::Tool, &mut ToolContext)) {
         // Split the borrows: the toolbox is taken out of `self` for the call so
         // the tool can hold `&mut self.doc` at the same time.
         let mut tools = std::mem::take(&mut self.tools);
@@ -214,25 +298,40 @@ impl EditorState {
             composite: &composite,
             status: None,
         };
-        let tool = tools.active_mut();
-        match phase {
-            PointerPhase::Down => tool.pointer_down(&mut ctx, event),
-            PointerPhase::Move => tool.pointer_move(&mut ctx, event),
-            PointerPhase::Up => tool.pointer_up(&mut ctx, event),
-            PointerPhase::Cancel => tool.cancel(&mut ctx),
-        }
+        f(tools.active_mut(), &mut ctx);
         let status = ctx.status.take();
         self.tools = tools;
         if let Some(message) = status {
             self.status = message;
         }
+    }
+
+    /// Send a pointer event to the active tool.
+    pub fn tool_pointer(&mut self, phase: PointerPhase, event: &ToolEvent) {
+        self.sync_tools();
+        self.with_tool(|tool, ctx| match phase {
+            PointerPhase::Down => tool.pointer_down(ctx, event),
+            PointerPhase::Move => tool.pointer_move(ctx, event),
+            PointerPhase::Up => tool.pointer_up(ctx, event),
+            PointerPhase::Cancel => tool.cancel(ctx),
+        });
         if phase == PointerPhase::Up || phase == PointerPhase::Down {
             self.remember_color();
         }
     }
 
     /// Select a tool.
+    ///
+    /// A pending transform or liquify session is applied first: switching tool
+    /// is a confirmation everywhere else, and silently discarding the work
+    /// would be the surprising choice.
     pub fn select_tool(&mut self, id: ToolId) {
+        if id == self.tools.active_id() {
+            return;
+        }
+        if self.has_pending_tool_edit() {
+            self.commit_tool();
+        }
         if self.tools.select(id) {
             self.status = self.tr(id.label_key()).to_string();
         }
@@ -347,6 +446,73 @@ impl EditorState {
             ..Default::default()
         };
         self.export_image(path, &settings)
+    }
+
+    /// Save the current settings as a new preset.
+    pub fn add_current_brush_as_preset(&mut self) {
+        let mut preset = self.brush.clone();
+        preset.sanitize();
+        // A duplicate name would make the preset list ambiguous.
+        if self.brush_presets.iter().any(|p| p.name == preset.name) {
+            preset.name = format!("{} copy", preset.name);
+        }
+        self.status = format!("Saved preset '{}'", preset.name);
+        self.brush_presets.push(preset);
+    }
+
+    /// Write every preset to a JSON file.
+    pub fn export_brush_presets(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        aether_io::save_presets(&self.brush_presets, path)?;
+        self.status = format!(
+            "Exported {} presets to {}",
+            self.brush_presets.len(),
+            path.display()
+        );
+        Ok(())
+    }
+
+    /// Load presets from a JSON file, appending them to the library.
+    ///
+    /// Loading never replaces the library: an imported set is additive, and a
+    /// name that already exists is suffixed rather than silently overwriting
+    /// the artist's own brush.
+    pub fn import_brush_presets(&mut self, path: impl AsRef<Path>) -> Result<usize> {
+        let loaded = aether_io::load_presets(path.as_ref())?;
+        let count = loaded.len();
+        for mut preset in loaded {
+            while self.brush_presets.iter().any(|p| p.name == preset.name) {
+                preset.name = format!("{} (imported)", preset.name);
+            }
+            self.brush_presets.push(preset);
+        }
+        self.status = format!("Imported {count} presets");
+        Ok(count)
+    }
+
+    /// Ask for a path, then export the preset library.
+    pub fn export_brush_presets_via_dialog(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .add_filter("Brush presets", &["json"])
+            .set_file_name("aether-brushes.json")
+            .save_file();
+        if let Some(path) = picked {
+            if let Err(error) = self.export_brush_presets(path) {
+                self.report_error("Export presets", &error);
+            }
+        }
+    }
+
+    /// Ask for a path, then import presets.
+    pub fn import_brush_presets_via_dialog(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .add_filter("Brush presets", &["json"])
+            .pick_file();
+        if let Some(path) = picked {
+            if let Err(error) = self.import_brush_presets(path) {
+                self.report_error("Import presets", &error);
+            }
+        }
     }
 
     /// True when there is work that would be lost by closing.
@@ -479,6 +645,84 @@ impl EditorState {
     pub fn set_layer_property(&mut self, id: LayerId, property: LayerProperty) -> Result<()> {
         let command = SetLayerPropertyCommand::new(id, property);
         self.history.execute(&mut self.doc, Box::new(command))
+    }
+
+    /// Replace a layer's effect stack.
+    pub fn set_layer_effects(&mut self, id: LayerId, effects: Vec<LayerEffect>, label: &str) -> Result<()> {
+        let command = SetLayerEffectsCommand::new(label, id, effects);
+        self.history.execute(&mut self.doc, Box::new(command))
+    }
+
+    /// Add a non-destructive adjustment layer above the active layer.
+    pub fn add_adjustment_layer(&mut self, adjustment: Adjustment) -> Result<LayerId> {
+        let id = self.doc.next_layer_id();
+        let layer = Layer::adjustment(id, adjustment.name(), adjustment);
+        let command = AddLayerCommand::above_active(&self.doc, layer);
+        self.history.execute(&mut self.doc, Box::new(command))?;
+        Ok(id)
+    }
+
+    /// Edit the adjustment on an adjustment layer.
+    pub fn set_adjustment(&mut self, id: LayerId, adjustment: Adjustment) -> Result<()> {
+        // The adjustment lives in the layer's content, so this is a content
+        // edit rather than a property change; it goes through the same
+        // effect-stack command shape to keep slider drags coalescing.
+        let layer = self.doc.layers.try_get(id)?;
+        let LayerContent::Adjustment(_) = &layer.content else {
+            return Err(AetherError::document("that layer is not an adjustment layer"));
+        };
+        let command = SetAdjustmentCommand::new(id, adjustment);
+        self.history.execute(&mut self.doc, Box::new(command))
+    }
+
+    /// Apply a filter destructively to the active layer, inside the selection.
+    ///
+    /// The same kernels back the non-destructive effect stack; this path is for
+    /// when an artist wants the result baked in.
+    pub fn apply_filter(&mut self, kind: EffectKind) -> Result<()> {
+        let id = self.doc.active_layer;
+        let region = self.doc.selection.bounds().unwrap_or_else(|| self.doc.bounds());
+        let selection = self.doc.selection.mask().cloned();
+        let effect = LayerEffect::new(kind);
+        let label = format!("Filter: {}", effect.name());
+        let bounds = self.doc.bounds();
+        let edit = RegionEdit::capture(&mut self.doc, id, bounds, label, |pixmap| {
+            let filtered = effect.apply(pixmap);
+            match &selection {
+                // Restricted to the selection: composite the filtered copy back
+                // through the selection mask so the edges stay soft.
+                Some(mask) => {
+                    let opts = CompositeOptions {
+                        blend: BlendMode::Normal,
+                        opacity: 1.0,
+                        offset: (0, 0),
+                        region: Some(region),
+                        alpha_lock: false,
+                    };
+                    // Clear first: a filter can reduce alpha, and a plain
+                    // composite could never take coverage away.
+                    for y in region.y..region.bottom() {
+                        for x in region.x..region.right() {
+                            let coverage = mask.get(x, y);
+                            if coverage == 0 {
+                                continue;
+                            }
+                            let original = pixmap.get(x, y);
+                            let result = filtered.get(x, y);
+                            let t = coverage as f32 / 255.0;
+                            pixmap.set(x, y, original.to_rgba().lerp(result.to_rgba(), t).to_rgba8());
+                        }
+                    }
+                    let _ = opts;
+                }
+                None => *pixmap = filtered,
+            }
+            Ok(())
+        })?;
+        if !edit.is_noop() {
+            self.history.push_applied(Box::new(edit));
+        }
+        Ok(())
     }
 
     /// Turn the current selection into a mask on `id`.
@@ -710,6 +954,14 @@ impl EditorState {
                 self.select_tool(ToolId::Move);
                 Ok(())
             }
+            Action::ToolTransform => {
+                self.select_tool(ToolId::Transform);
+                Ok(())
+            }
+            Action::ToolLiquify => {
+                self.select_tool(ToolId::Liquify);
+                Ok(())
+            }
             Action::ToolPan => {
                 self.select_tool(ToolId::Pan);
                 Ok(())
@@ -793,6 +1045,8 @@ mod tests {
     use super::*;
     use aether_core::input::{InputSample, Modifiers, PointerButton};
     use aether_core::math::Vec2;
+    use aether_raster::adjust::Adjustment;
+    use aether_raster::effect::{EffectKind, LayerEffect};
 
     fn state() -> EditorState {
         EditorState::new(Document::new(64, 64, "test"))
@@ -1135,6 +1389,184 @@ mod tests {
             s.handle_action(Action::BrushLarger);
         }
         assert!(s.brush.size <= 5000.0);
+    }
+
+    #[test]
+    fn adjustment_layers_can_be_added_and_retuned() {
+        let mut s = state();
+        if let Some(pm) = s
+            .doc
+            .layers
+            .get_mut(s.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill(Rgba8::rgb(10, 20, 30));
+        }
+        let id = s.add_adjustment_layer(Adjustment::Invert).expect("add");
+        s.cache.invalidate();
+        s.refresh();
+        assert_eq!(s.composite().get(4, 4), Rgba8::rgb(245, 235, 225));
+
+        // Retune it, then undo back through both steps.
+        s.set_adjustment(id, Adjustment::Grayscale).expect("retune");
+        s.cache.invalidate();
+        s.refresh();
+        let grey = s.composite().get(4, 4);
+        assert_eq!(grey.r, grey.g);
+        s.history.undo(&mut s.doc).expect("undo retune");
+        s.history.undo(&mut s.doc).expect("undo add");
+        assert_eq!(s.doc.layer_count(), 1);
+    }
+
+    #[test]
+    fn retuning_a_raster_layer_as_an_adjustment_is_refused() {
+        let mut s = state();
+        let id = s.doc.active_layer;
+        assert!(s.set_adjustment(id, Adjustment::Invert).is_err());
+    }
+
+    #[test]
+    fn layer_effects_show_up_in_the_composite_and_undo() {
+        let mut s = state();
+        if let Some(pm) = s
+            .doc
+            .layers
+            .get_mut(s.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill_rect(IRect::new(20, 20, 10, 10), Rgba8::WHITE);
+        }
+        let id = s.doc.active_layer;
+        s.set_layer_effects(
+            id,
+            vec![LayerEffect::new(EffectKind::DropShadow {
+                dx: 6.0,
+                dy: 6.0,
+                radius: 2.0,
+                color: Rgba8::BLACK,
+                opacity: 1.0,
+            })],
+            "Add Effect",
+        )
+        .expect("effects");
+        s.cache.invalidate();
+        s.refresh();
+        assert!(s.composite().get(34, 34).a > 0, "the shadow should be visible");
+
+        s.history.undo(&mut s.doc).expect("undo");
+        s.cache.invalidate();
+        s.refresh();
+        assert_eq!(s.composite().get(34, 34).a, 0);
+    }
+
+    #[test]
+    fn filters_are_destructive_and_undoable() {
+        let mut s = state();
+        if let Some(pm) = s
+            .doc
+            .layers
+            .get_mut(s.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill(Rgba8::rgb(10, 20, 30));
+        }
+        s.apply_filter(EffectKind::Adjust {
+            adjustment: Adjustment::Invert,
+        })
+        .expect("filter");
+        assert_eq!(pixel(&s, 5, 5), Rgba8::rgb(245, 235, 225));
+        s.history.undo(&mut s.doc).expect("undo");
+        assert_eq!(pixel(&s, 5, 5), Rgba8::rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn filters_stay_inside_the_selection() {
+        let mut s = state();
+        if let Some(pm) = s
+            .doc
+            .layers
+            .get_mut(s.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill(Rgba8::rgb(10, 20, 30));
+        }
+        s.doc
+            .selection
+            .select_rect(64, 64, IRect::new(0, 0, 32, 64), SelectionMode::Replace);
+        s.apply_filter(EffectKind::Adjust {
+            adjustment: Adjustment::Invert,
+        })
+        .expect("filter");
+        assert_eq!(pixel(&s, 5, 5), Rgba8::rgb(245, 235, 225), "inside the selection");
+        assert_eq!(pixel(&s, 50, 5), Rgba8::rgb(10, 20, 30), "outside it");
+    }
+
+    #[test]
+    fn brush_presets_round_trip_through_a_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("brushes.json");
+        let mut s = state();
+        s.brush.name = "My Pen".into();
+        s.brush.size = 33.0;
+        s.add_current_brush_as_preset();
+        let count = s.brush_presets.len();
+        s.export_brush_presets(&path).expect("export");
+
+        let mut other = state();
+        let imported = other.import_brush_presets(&path).expect("import");
+        assert_eq!(imported, count);
+        assert!(other.brush_presets.iter().any(|p| p.size == 33.0));
+    }
+
+    #[test]
+    fn importing_presets_never_overwrites_an_existing_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("brushes.json");
+        let mut s = state();
+        s.export_brush_presets(&path).expect("export");
+        let before = s.brush_presets.len();
+        s.import_brush_presets(&path).expect("import");
+        assert_eq!(s.brush_presets.len(), before * 2);
+        let names: std::collections::HashSet<&str> =
+            s.brush_presets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names.len(), s.brush_presets.len(), "names must stay unique");
+    }
+
+    #[test]
+    fn pressure_sources_behave_as_described() {
+        // A device that reports force is trusted.
+        assert_eq!(PressureSource::Device.resolve(Some(0.4), 0.0), 0.4);
+        // Without a reported force the brush behaves like a mouse.
+        assert_eq!(PressureSource::Device.resolve(None, 500.0), 1.0);
+        // Speed mode tapers: faster is lighter.
+        let slow = PressureSource::Speed.resolve(None, 50.0);
+        let fast = PressureSource::Speed.resolve(None, 1200.0);
+        assert!(slow > fast, "slow={slow} fast={fast}");
+        assert!(fast >= 0.25, "the taper must not vanish entirely");
+        // Off ignores everything.
+        assert_eq!(PressureSource::Off.resolve(Some(0.1), 900.0), 1.0);
+    }
+
+    #[test]
+    fn switching_tool_commits_a_pending_transform() {
+        let mut s = state();
+        if let Some(pm) = s
+            .doc
+            .layers
+            .get_mut(s.doc.active_layer)
+            .and_then(|l| l.pixmap_mut())
+        {
+            pm.fill_rect(IRect::new(10, 10, 40, 40), Rgba8::WHITE);
+        }
+        s.select_tool(ToolId::Transform);
+        s.tool_pointer(PointerPhase::Down, &event(30.0, 30.0, 0.016));
+        s.tool_pointer(PointerPhase::Move, &event(42.0, 30.0, 0.032));
+        s.tool_pointer(PointerPhase::Up, &event(42.0, 30.0, 0.048));
+        assert!(s.has_pending_tool_edit());
+
+        s.select_tool(ToolId::Brush);
+        assert!(!s.has_pending_tool_edit(), "switching tool applies the transform");
+        assert_eq!(s.history.depth(), 1);
     }
 
     #[test]

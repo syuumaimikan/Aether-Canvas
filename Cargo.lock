@@ -76,6 +76,7 @@ dependencies = [
  "aether-core",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

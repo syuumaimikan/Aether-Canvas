@@ -8,6 +8,8 @@ use crate::state::{EditorState, Workspace};
 use crate::theme::Theme;
 use aether_document::Document;
 use aether_io::project;
+use aether_raster::adjust::Adjustment;
+use aether_raster::effect::EffectKind;
 use egui_dock::{DockArea, DockState, Style};
 use std::path::PathBuf;
 
@@ -30,12 +32,28 @@ impl Default for NewDocumentDialog {
     }
 }
 
+/// A destructive filter waiting to be applied.
+struct FilterDialog {
+    open: bool,
+    kind: EffectKind,
+}
+
+impl Default for FilterDialog {
+    fn default() -> Self {
+        Self {
+            open: false,
+            kind: EffectKind::Blur { sigma: 4.0 },
+        }
+    }
+}
+
 /// The eframe application.
 pub struct AetherApp {
     state: EditorState,
     dock: DockState<PanelKind>,
     canvas: CanvasView,
     new_dialog: NewDocumentDialog,
+    filter_dialog: FilterDialog,
     show_about: bool,
     show_shortcuts: bool,
     rebinding: Option<Action>,
@@ -69,6 +87,7 @@ impl AetherApp {
             dock,
             canvas: CanvasView::new(),
             new_dialog: NewDocumentDialog::default(),
+            filter_dialog: FilterDialog::default(),
             show_about: false,
             show_shortcuts: false,
             rebinding: None,
@@ -215,6 +234,18 @@ impl AetherApp {
                         ui.close();
                     }
                 }
+                ui.separator();
+                if self.menu_item(ui, "menu.edit.transform", Action::ToolTransform) {
+                    ui.close();
+                }
+                let pending = self.state.has_pending_tool_edit();
+                if ui
+                    .add_enabled(pending, egui::Button::new(lang.tr("menu.edit.apply")))
+                    .clicked()
+                {
+                    self.state.commit_tool();
+                    ui.close();
+                }
             });
 
             ui.menu_button(lang.tr("menu.layer"), |ui| {
@@ -225,6 +256,50 @@ impl AetherApp {
                     ("layer.merge_down", Action::MergeDown),
                 ] {
                     if self.menu_item(ui, key, action) {
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                ui.menu_button(lang.tr("menu.layer.new_adjustment"), |ui| {
+                    for adjustment in Adjustment::presets() {
+                        if ui.button(adjustment.name()).clicked() {
+                            if let Err(error) = self.state.add_adjustment_layer(adjustment) {
+                                self.state.report_error("Adjustment layer", &error);
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+            });
+
+            ui.menu_button(lang.tr("menu.filter"), |ui| {
+                for (label, kind) in [
+                    ("menu.filter.blur", EffectKind::Blur { sigma: 4.0 }),
+                    (
+                        "menu.filter.sharpen",
+                        EffectKind::Sharpen {
+                            amount: 0.6,
+                            radius: 1.5,
+                        },
+                    ),
+                    (
+                        "menu.filter.motion_blur",
+                        EffectKind::MotionBlur {
+                            angle: 0.0,
+                            distance: 16.0,
+                        },
+                    ),
+                    (
+                        "menu.filter.grain",
+                        EffectKind::Grain {
+                            amount: 0.15,
+                            seed: 1,
+                            monochrome: true,
+                        },
+                    ),
+                ] {
+                    if ui.button(lang.tr(label)).clicked() {
+                        self.filter_dialog = FilterDialog { open: true, kind };
                         ui.close();
                     }
                 }
@@ -359,6 +434,7 @@ impl AetherApp {
 
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.new_document_dialog(ctx);
+        self.filter_dialog(ctx);
         self.about_window(ctx);
         self.shortcuts_window(ctx);
         self.close_confirmation(ctx);
@@ -421,6 +497,48 @@ impl AetherApp {
             self.new_dialog.open = false;
         } else {
             self.new_dialog.open = open;
+        }
+    }
+
+    /// Parameters for a destructive filter, applied on confirmation.
+    fn filter_dialog(&mut self, ctx: &egui::Context) {
+        if !self.filter_dialog.open {
+            return;
+        }
+        let lang = self.state.language;
+        let mut open = true;
+        let mut cancel = false;
+        let mut apply = false;
+        let title = crate::panels::effect_name(&self.filter_dialog.kind);
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                crate::panels::effect_editor(ui, &mut self.filter_dialog.kind, "filter-dialog");
+                if self.state.doc.selection.is_active() {
+                    ui.label("Applies inside the selection.");
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button(lang.tr("dialog.apply")).clicked() {
+                        apply = true;
+                    }
+                    if ui.button(lang.tr("dialog.cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if apply {
+            let kind = self.filter_dialog.kind.clone();
+            if let Err(error) = self.state.apply_filter(kind) {
+                self.state.report_error("Filter", &error);
+            }
+            self.filter_dialog.open = false;
+        } else if cancel {
+            self.filter_dialog.open = false;
+        } else {
+            self.filter_dialog.open = open;
         }
     }
 

@@ -19,7 +19,7 @@ use aether_core::color::Rgba8;
 use aether_core::math::{IRect, Transform2D};
 use aether_core::LayerId;
 use aether_raster::adjust::Adjustment;
-use aether_raster::{Mask, Pixmap};
+use aether_raster::{LayerEffect, Mask, Pixmap};
 use serde::{Deserialize, Serialize};
 
 /// A colour tag shown in the layer panel, for organising a busy stack.
@@ -196,6 +196,10 @@ pub struct Layer {
     pub mask_enabled: bool,
     /// Organisational colour tag.
     pub color_label: ColorLabel,
+    /// Non-destructive effects, applied in order after the content is produced
+    /// and before the layer is blended into the backdrop.
+    #[serde(default)]
+    pub effects: Vec<LayerEffect>,
     /// The payload.
     pub content: LayerContent,
 }
@@ -240,6 +244,7 @@ impl Layer {
             mask: None,
             mask_enabled: true,
             color_label: ColorLabel::None,
+            effects: Vec::new(),
             content,
         }
     }
@@ -287,6 +292,11 @@ impl Layer {
     /// True when a painting tool may write to this layer right now.
     pub fn is_paintable(&self) -> bool {
         !self.locked && matches!(self.content, LayerContent::Raster(_))
+    }
+
+    /// True when this layer has at least one enabled effect.
+    pub fn has_effects(&self) -> bool {
+        self.effects.iter().any(|e| e.enabled)
     }
 
     /// The mask, if one exists and is enabled.
