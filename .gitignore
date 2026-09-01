@@ -1,0 +1,6 @@
+/target
+**/target
+Cargo.lock.bak
+*.aether.bak
+.DS_Store
+/out

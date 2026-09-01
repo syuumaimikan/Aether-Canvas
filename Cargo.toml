@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aether-core",
+    "crates/aether-raster",
+    "crates/aether-document",
+    "crates/aether-render",
+    "crates/aether-io",
+    "crates/aether-ui",
+    "apps/desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/syuumaimikan/Aether-Canvas"
+authors = ["Aether Canvas contributors"]
+
+[workspace.dependencies]
+# Internal crates
+aether-core = { path = "crates/aether-core", version = "0.1.0" }
+aether-raster = { path = "crates/aether-raster", version = "0.1.0" }
+aether-document = { path = "crates/aether-document", version = "0.1.0" }
+aether-render = { path = "crates/aether-render", version = "0.1.0" }
+aether-io = { path = "crates/aether-io", version = "0.1.0" }
+aether-ui = { path = "crates/aether-ui", version = "0.1.0" }
+
+# External
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+rayon = "1.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
+zip = { version = "8.0", default-features = false, features = ["deflate"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+eframe = { version = "0.35", default-features = false, features = ["wgpu", "default_fonts", "persistence", "x11", "wayland"] }
+egui = "0.35"
+egui_dock = "0.20"
+egui_extras = "0.35"
+rfd = "0.17"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

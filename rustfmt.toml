@@ -1,0 +1,4 @@
+# Slightly wider than the default: the compositor and blending code reads better
+# with its argument lists on one line.
+max_width = 110
+use_field_init_shorthand = true

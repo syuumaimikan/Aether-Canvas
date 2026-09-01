@@ -1,0 +1,15 @@
+[package]
+name = "aether-document"
+description = "Document model, layer tree and the undo/redo command system for Aether Canvas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+aether-raster.workspace = true
+serde.workspace = true
+serde_json.workspace = true

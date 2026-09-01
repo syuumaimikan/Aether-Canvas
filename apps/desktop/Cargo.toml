@@ -1,0 +1,29 @@
+[package]
+name = "aether-desktop"
+description = "Aether Canvas desktop application."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "aether-canvas"
+path = "src/main.rs"
+
+[dependencies]
+aether-core.workspace = true
+aether-raster.workspace = true
+aether-document.workspace = true
+aether-io.workspace = true
+aether-render.workspace = true
+aether-ui.workspace = true
+eframe.workspace = true
+egui.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+aether-raster.workspace = true
+tempfile = "3"

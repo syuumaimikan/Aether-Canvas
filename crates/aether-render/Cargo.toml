@@ -1,0 +1,18 @@
+[package]
+name = "aether-render"
+description = "Layer-tree compositor, render cache and canvas viewport maths for Aether Canvas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-core.workspace = true
+aether-raster.workspace = true
+aether-document.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
