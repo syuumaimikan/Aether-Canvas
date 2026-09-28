@@ -23,6 +23,6 @@ pub mod math;
 pub use blend::BlendMode;
 pub use color::{Hsl, Hsv, Rgba, Rgba8};
 pub use error::{AetherError, Result};
-pub use id::{AssetId, CompositionId, DocumentId, LayerId, ParameterId};
+pub use id::{AssetId, BoneId, CompositionId, DeformerId, DocumentId, LayerId, ParameterId};
 pub use input::{InputSample, Modifiers, PointerButton};
 pub use math::{IRect, Rect, Transform2D, Vec2};

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/aether-core",
     "crates/aether-raster",
+    "crates/aether-rig",
     "crates/aether-document",
     "crates/aether-render",
     "crates/aether-io",
@@ -22,6 +23,7 @@ authors = ["Aether Canvas contributors"]
 # Internal crates
 aether-core = { path = "crates/aether-core", version = "0.1.0" }
 aether-raster = { path = "crates/aether-raster", version = "0.1.0" }
+aether-rig = { path = "crates/aether-rig", version = "0.1.0" }
 aether-document = { path = "crates/aether-document", version = "0.1.0" }
 aether-render = { path = "crates/aether-render", version = "0.1.0" }
 aether-io = { path = "crates/aether-io", version = "0.1.0" }

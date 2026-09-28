@@ -17,6 +17,7 @@ use aether_core::math::IRect;
 use aether_core::{AetherError, DocumentId, LayerId, Result};
 use aether_raster::tile::DirtyRegion;
 use aether_raster::Pixmap;
+use aether_rig::Rig;
 use serde::{Deserialize, Serialize};
 
 /// What shows through where every layer is transparent.
@@ -95,6 +96,10 @@ pub struct Document {
     pub ids: IdGenerator,
     /// Authoring metadata.
     pub metadata: DocumentMetadata,
+    /// Rigging and animation: parameters, meshes bound to layers, deformers,
+    /// bones, physics and motions. Empty for a document that does not move.
+    #[serde(default)]
+    pub rig: Rig,
 
     /// Region changed since the renderer last caught up. Never serialised: it
     /// is a cache-invalidation hint, not part of the artwork.
@@ -118,6 +123,7 @@ impl Document {
             selection: Selection::none(),
             ids,
             metadata: DocumentMetadata::now(),
+            rig: Rig::new(),
             dirty: DirtyRegion::new(),
         }
     }
@@ -276,6 +282,8 @@ impl Document {
     pub fn repair(&mut self) {
         self.layers.rebuild_parents();
         self.ids.reserve_at_least(self.layers.max_id().max(self.id.raw()));
+        self.rig.repair();
+        self.rig.reserve_ids(&self.ids);
         self.ensure_active_layer();
         self.selection.resize(self.width, self.height);
         self.mark_all_dirty();

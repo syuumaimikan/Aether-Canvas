@@ -73,6 +73,12 @@ typed_id!(
 typed_id!(
     /// Identifies a rig parameter such as `AngleX` or `MouthOpen`.
     ParameterId, "param#");
+typed_id!(
+    /// Identifies a rig deformer (a warp lattice or a rotation pivot).
+    DeformerId, "deformer#");
+typed_id!(
+    /// Identifies a bone in a rig's skeleton.
+    BoneId, "bone#");
 
 /// Monotonic allocator for typed ids.
 ///
@@ -160,6 +166,14 @@ impl IdGenerator {
     /// Allocate a fresh [`ParameterId`].
     pub fn parameter(&self) -> ParameterId {
         ParameterId(self.next_raw())
+    }
+    /// Allocate a fresh [`DeformerId`].
+    pub fn deformer(&self) -> DeformerId {
+        DeformerId(self.next_raw())
+    }
+    /// Allocate a fresh [`BoneId`].
+    pub fn bone(&self) -> BoneId {
+        BoneId(self.next_raw())
     }
 }
 

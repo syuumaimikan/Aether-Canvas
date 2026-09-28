@@ -1,6 +1,6 @@
 [package]
-name = "aether-document"
-description = "Document model, layer tree and the undo/redo command system for Aether Canvas."
+name = "aether-rig"
+description = "2D rigging and animation for Aether Canvas: parameters, keyforms, deformers, bones, physics, drivers and motions."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,5 @@ authors.workspace = true
 [dependencies]
 aether-core.workspace = true
 aether-raster.workspace = true
-aether-rig.workspace = true
 serde.workspace = true
 serde_json.workspace = true
