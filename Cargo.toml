@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Built on its own (see runtime/godot/README.md).
+exclude = ["runtime/godot/rust"]
 members = [
     "crates/aether-core",
     "crates/aether-raster",

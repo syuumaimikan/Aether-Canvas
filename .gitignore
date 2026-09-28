@@ -9,3 +9,8 @@ Cargo.lock.bak
 /runtime/web/model/
 /runtime/web/test/reference/
 /runtime/web/test/tracking-assets/
+# Godot extension build outputs (runtime/godot/build.sh) and Godot's cache
+/runtime/godot/addons/aether/bin/
+/runtime/godot/model/
+/runtime/godot/test/reference/
+/runtime/godot/.godot/

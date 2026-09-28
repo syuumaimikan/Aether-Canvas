@@ -1,0 +1,24 @@
+[package]
+name = "aether-godot"
+description = "Godot 4 extension for Aether Canvas models: the AetherModel2D node."
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# A workspace of its own: the Godot bindings are large, and the main
+# workspace's tests should not have to build them.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aether-player = { path = "../../../crates/aether-player" }
+aether-core = { path = "../../../crates/aether-core" }
+# Built against Godot 4.3's API, so it loads in 4.3 and every later 4.x.
+godot = { version = "0.5.5", features = ["api-4-3"] }
+
+[profile.release]
+lto = "thin"
