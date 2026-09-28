@@ -5,6 +5,7 @@ exclude = ["runtime/godot/rust"]
 members = [
     "crates/aether-core",
     "crates/aether-raster",
+    "crates/aether-live2d",
     "crates/aether-rig",
     "crates/aether-player",
     "crates/aether-player-wgpu",
@@ -27,6 +28,7 @@ authors = ["Aether Canvas contributors"]
 # Internal crates
 aether-core = { path = "crates/aether-core", version = "0.1.0" }
 aether-raster = { path = "crates/aether-raster", version = "0.1.0" }
+aether-live2d = { path = "crates/aether-live2d", version = "0.1.0" }
 aether-rig = { path = "crates/aether-rig", version = "0.1.0" }
 aether-player = { path = "crates/aether-player", version = "0.1.0" }
 aether-player-wgpu = { path = "crates/aether-player-wgpu", version = "0.1.0" }

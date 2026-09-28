@@ -1,0 +1,17 @@
+[package]
+name = "aether-live2d"
+description = "Live2D Cubism model support for Aether Canvas: an independent MOC3 reader and writer, and an evaluator that deforms models the way Cubism Core does."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
