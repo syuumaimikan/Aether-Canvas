@@ -94,6 +94,8 @@ pub fn composite_pixmap(
 
     let dst_width = dst.width();
     let row_bytes = dst_width as usize * BYTES_PER_PIXEL;
+    let src_row_bytes = src.width() as usize * BYTES_PER_PIXEL;
+    let src_data = src.data();
     let opacity = opts.opacity;
     let blend = opts.blend;
     let alpha_lock = opts.alpha_lock;
@@ -107,11 +109,15 @@ pub fn composite_pixmap(
         })
         .for_each(|(y, row)| {
             let y = y as i32;
-            let sy = y - oy;
+            // `region` lies inside the source, so every row and column read
+            // here exists.
+            let sy = (y - oy) as usize;
+            let src_row = &src_data[sy * src_row_bytes..(sy + 1) * src_row_bytes];
             for x in region.x..region.right() {
-                let sx = x - ox;
-                let mut source = src.get(sx, sy).to_rgba();
-                if source.a <= 0.0 && !alpha_lock {
+                let so = (x - ox) as usize * BYTES_PER_PIXEL;
+                let source_alpha = src_row[so + 3];
+                // Most of a typical layer is empty; skip it before any maths.
+                if source_alpha == 0 && !alpha_lock {
                     continue;
                 }
                 let mut op = opacity;
@@ -123,6 +129,14 @@ pub fn composite_pixmap(
                     op *= cov as f32 / 255.0;
                 }
                 let o = x as usize * BYTES_PER_PIXEL;
+                // An opaque pixel laid down normally at full strength simply
+                // replaces what is below: exactly what the maths would give.
+                if source_alpha == 255 && op >= 1.0 && blend == BlendMode::Normal && !alpha_lock {
+                    row[o..o + BYTES_PER_PIXEL].copy_from_slice(&src_row[so..so + BYTES_PER_PIXEL]);
+                    continue;
+                }
+                let mut source =
+                    Rgba8::new(src_row[so], src_row[so + 1], src_row[so + 2], source_alpha).to_rgba();
                 let backdrop = Rgba8::new(row[o], row[o + 1], row[o + 2], row[o + 3]).to_rgba();
                 if alpha_lock {
                     if backdrop.a <= 0.0 {

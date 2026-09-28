@@ -70,7 +70,8 @@ implemented.
 - Layered animator with override/additive layers and crossfades; expressions
 - Auto-blink, breathing, look-at and lip sync (live, or baked from WAV)
 - Sandboxed expression drivers
-- Export as GIF, PNG sequence and sprite sheet + JSON atlas, with physics
+- Export as GIF, APNG, PNG sequence and sprite sheet + JSON atlas, with
+  physics; the web player records WebM video
 
 Carried forward: onion skinning and frame-by-frame (raster) animation, which
 arrive with the pixel-art frame model of Phase 3; a draggable Bézier-handle
@@ -96,11 +97,18 @@ arrives with the FFmpeg pipeline of Phase 8.
   from the editor or headlessly (`--auto-rig --export-model`); `aether-player`
   running the editor's rig code, with a C ABI, a WebAssembly + WebGL web
   player and a software renderer, all parity-tested against the editor
+- Face tracking: one mapping from ARKit/MediaPipe-style trackers onto the
+  standard parameters, and webcam tracking in the web player
+- Live2D interchange: motions (`.motion3.json`) and expressions
+  (`.exp3.json`), both ways
+- A wgpu renderer for players, and a GPU pose preview in the editor whenever
+  it is exact
+- A Godot 4 package: the `AetherModel2D` node, tested in Godot with all three
+  renderers
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group
-(part switching) editor, and ready-made engine packages (a Unity package and
-a Godot extension over the C ABI).
+(part switching) editor, and a ready-made Unity package.
 
 ## Phase 7 — Motion graphics
 

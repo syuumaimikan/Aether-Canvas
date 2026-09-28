@@ -21,6 +21,7 @@
 
 use crate::model::Model;
 use crate::player::{DrawItem, Player, Stage};
+use crate::tracking::{FaceFrame, BLENDSHAPES};
 use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
@@ -575,6 +576,123 @@ pub unsafe extern "C" fn aether_player_event_motion(p: *const AetherPlayer, inde
         .unwrap_or(-1)
 }
 
+// ---- face tracking ---------------------------------------------------------
+
+/// Number of blend shapes a face sample carries (52).
+#[no_mangle]
+pub extern "C" fn aether_blendshape_count() -> u32 {
+    BLENDSHAPES.len() as u32
+}
+
+/// Name of blend shape `index`, in the order
+/// [`aether_player_track_face`] expects (ARKit naming, as MediaPipe uses).
+///
+/// # Safety
+/// `len` must be null or valid for a write.
+#[no_mangle]
+pub unsafe extern "C" fn aether_blendshape_name(index: u32, len: *mut usize) -> *const u8 {
+    static NAMES: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
+    let names = NAMES.get_or_init(|| BLENDSHAPES.iter().map(|n| c_string(n)).collect());
+    out_str(names.get(index as usize), len)
+}
+
+/// Feed one face-tracker sample: head angles in degrees in the tracked
+/// person's frame (yaw toward their left, pitch up, roll toward their left
+/// shoulder) and `count` blend-shape weights in
+/// [`aether_blendshape_name`] order. Missing weights count as zero.
+///
+/// # Safety
+/// `p` must be null or a live handle; `shapes` must be null or point to
+/// `count` floats.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_track_face(
+    p: *mut AetherPlayer,
+    yaw: f32,
+    pitch: f32,
+    roll: f32,
+    shapes: *const f32,
+    count: u32,
+) {
+    let Some(h) = get_mut(p) else {
+        return;
+    };
+    let mut frame = FaceFrame {
+        yaw,
+        pitch,
+        roll,
+        ..Default::default()
+    };
+    if !shapes.is_null() {
+        let given = std::slice::from_raw_parts(shapes, count as usize);
+        for (slot, value) in frame.shapes.iter_mut().zip(given) {
+            *slot = *value;
+        }
+    }
+    h.player.track_face(&frame);
+}
+
+/// Make the latest tracked face the neutral one.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_track_calibrate(p: *mut AetherPlayer) {
+    if let Some(h) = get_mut(p) {
+        h.player.calibrate_tracking();
+    }
+}
+
+/// Stop following the tracker.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_track_stop(p: *mut AetherPlayer) {
+    if let Some(h) = get_mut(p) {
+        h.player.stop_tracking();
+    }
+}
+
+/// 1 while a tracker drives the model.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_is_tracking(p: *const AetherPlayer) -> u32 {
+    get(p).map(|h| h.player.is_tracking() as u32).unwrap_or(0)
+}
+
+/// Tracking options: mirror (non-zero: move like a mirror image), smoothing
+/// time constant in seconds, head gain, how much the body follows the head,
+/// and mouth gain. Non-finite values leave that option unchanged.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_track_settings(
+    p: *mut AetherPlayer,
+    mirror: u32,
+    smoothing: f32,
+    head_gain: f32,
+    body_follow: f32,
+    mouth_gain: f32,
+) {
+    let Some(h) = get_mut(p) else {
+        return;
+    };
+    let settings = h.player.tracking_settings_mut();
+    settings.mirror = mirror != 0;
+    let set = |slot: &mut f32, v: f32| {
+        if v.is_finite() {
+            *slot = v.max(0.0);
+        }
+    };
+    set(&mut settings.smoothing, smoothing);
+    set(&mut settings.head_gain, head_gain);
+    set(&mut settings.body_follow, body_follow);
+    set(&mut settings.mouth_gain, mouth_gain);
+}
+
 // ---- geometry --------------------------------------------------------------
 
 /// Number of parts.
@@ -791,6 +909,32 @@ mod tests {
             let mut len = 0usize;
             let message = aether_last_error(&mut len);
             assert!(text(message, len).contains("not a valid model"));
+        }
+    }
+
+    #[test]
+    fn face_samples_arrive_through_the_c_api() {
+        unsafe {
+            assert_eq!(aether_blendshape_count(), 52);
+            let mut len = 0usize;
+            let name = aether_blendshape_name(24, &mut len);
+            assert_eq!(text(name, len), "jawOpen");
+            assert!(aether_blendshape_name(52, &mut len).is_null());
+
+            let json = model_json();
+            let p = aether_player_new(json.as_ptr(), json.len());
+            assert_eq!(aether_player_is_tracking(p), 0);
+            let shapes = [0.5f32; 30];
+            aether_player_track_face(p, 10.0, 0.0, 0.0, shapes.as_ptr(), shapes.len() as u32);
+            aether_player_track_face(p, 10.0, 0.0, 0.0, ptr::null(), 0);
+            assert_eq!(aether_player_is_tracking(p), 1);
+            aether_player_track_settings(p, 0, f32::NAN, 1.5, 0.0, 1.0);
+            aether_player_track_calibrate(p);
+            aether_player_tick(p, 0.016);
+            aether_player_track_stop(p);
+            assert_eq!(aether_player_is_tracking(p), 0);
+            aether_player_track_face(ptr::null_mut(), 0.0, 0.0, 0.0, shapes.as_ptr(), 52);
+            aether_player_free(p);
         }
     }
 

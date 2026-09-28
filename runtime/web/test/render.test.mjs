@@ -105,3 +105,42 @@ test('the demo page plays, follows the pointer and reports taps', { skip: !playw
     server.close();
   }
 });
+
+test('the player records what it shows as a video', { skip: !playwright && 'Playwright is not installed' }, async () => {
+  const server = await serve(fileURLToPath(new URL('../', import.meta.url)));
+  const browser = await playwright.chromium.launch({
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+  });
+  try {
+    const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await page.waitForFunction(() => window.demo.player);
+    const result = await page.evaluate(async () => {
+      const { player } = window.demo;
+      const recording = player.record({ fps: 30 });
+      await new Promise((r) => setTimeout(r, 1500));
+      const blob = await recording.stop();
+      // Play it back to prove it decodes.
+      const video = document.createElement('video');
+      video.muted = true;
+      video.src = URL.createObjectURL(blob);
+      await new Promise((resolve, reject) => {
+        video.onloadedmetadata = resolve;
+        video.onerror = () => reject(new Error('the recording does not decode'));
+      });
+      return {
+        type: blob.type,
+        size: blob.size,
+        size2: [video.videoWidth, video.videoHeight],
+        canvas: [player.canvas.width, player.canvas.height],
+        mimeType: recording.mimeType,
+      };
+    });
+    assert.match(result.type, /^video\//);
+    assert.ok(result.size > 2000, `a real video: ${JSON.stringify(result)}`);
+    assert.deepEqual(result.size2, result.canvas, 'the video is the canvas');
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

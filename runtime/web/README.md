@@ -47,8 +47,35 @@ Copy `aether-player.js` and `aether_player.wasm` next to each other, then:
   player.setExpression('Smile');
   // …or lip sync from a microphone or an <audio> element.
   player.lipSync(await navigator.mediaDevices.getUserMedia({ audio: true }));
+
+  // Record a clip (WebM; a transparent background stays transparent).
+  const recording = player.record();
+  // …later
+  const video = await recording.stop();   // a Blob to download or upload
 </script>
 ```
+
+## Face tracking
+
+`aether-tracking.js` turns a webcam into a puppet controller: it runs
+Google's MediaPipe Face Landmarker in the page (video never leaves the
+device) and feeds head angles and the 52 standard blend shapes to the model.
+
+```js
+import { startFaceTracking } from './aether-tracking.js';
+
+player.stopMotions();                       // the face drives the head now
+const tracking = await startFaceTracking(player);   // asks for the camera
+tracking.calibrate();                       // "this is my neutral face"
+tracking.stop();
+```
+
+The model moves like a mirror image by default (`{ mirror: false }` turns
+that off); auto-blink pauses while the eyes are tracked. MediaPipe loads from
+a CDN unless you pass `vision`, `wasm` and `model` URLs to self-host it. Any
+other tracker (an iPhone's ARKit, a VTuber tracking app) can drive a model the
+same way through `model.trackFace({ yaw, pitch, roll, shapes })`; the mapping
+onto parameters lives in the player, so it is identical everywhere.
 
 The layers underneath are usable on their own:
 
@@ -85,5 +112,10 @@ node --test runtime/web/test/*.test.mjs
   events, hit testing and bad input.
 * `render.test.mjs` renders every reference pose with WebGL in headless
   Chromium and compares it with the software renderer, then drives the demo
-  page (pointer following, taps). It needs Playwright and is skipped without
-  it.
+  page (pointer following, taps) and records a clip, checking that it plays
+  back at the canvas's size. It needs Playwright and is skipped without it.
+* `tracking.test.mjs` checks head angles from face-mesh landmarks and face
+  samples through the module; after `test/fetch-tracking-assets.sh` (MediaPipe
+  and a public-domain photo of a face) it also has MediaPipe track that face,
+  turned on screen, in headless Chromium, and drives the demo page's webcam
+  button through a fake camera.

@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
+# Built on its own (see runtime/godot/README.md).
+exclude = ["runtime/godot/rust"]
 members = [
     "crates/aether-core",
     "crates/aether-raster",
     "crates/aether-rig",
     "crates/aether-player",
+    "crates/aether-player-wgpu",
     "crates/aether-document",
     "crates/aether-render",
     "crates/aether-io",
@@ -26,6 +29,7 @@ aether-core = { path = "crates/aether-core", version = "0.1.0" }
 aether-raster = { path = "crates/aether-raster", version = "0.1.0" }
 aether-rig = { path = "crates/aether-rig", version = "0.1.0" }
 aether-player = { path = "crates/aether-player", version = "0.1.0" }
+aether-player-wgpu = { path = "crates/aether-player-wgpu", version = "0.1.0" }
 aether-document = { path = "crates/aether-document", version = "0.1.0" }
 aether-render = { path = "crates/aether-render", version = "0.1.0" }
 aether-io = { path = "crates/aether-io", version = "0.1.0" }
@@ -38,6 +42,10 @@ thiserror = "2.0"
 rayon = "1.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
 zip = { version = "8.0", default-features = false, features = ["deflate"] }
+png = "0.18"
+wgpu = "29"
+bytemuck = "1"
+pollster = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eframe = { version = "0.35", default-features = false, features = ["wgpu", "default_fonts", "persistence", "x11", "wayland"] }

@@ -1,6 +1,7 @@
 //! Playing a model: time, input, and the per-frame draw list.
 
 use crate::model::{BlendKind, Model, ModelError, Node};
+use crate::tracking::{face_targets, FaceFrame, Tracking, TrackingSettings};
 use aether_core::math::{Rect, Vec2};
 use aether_rig::motion::MotionBlend;
 use aether_rig::runtime::RuntimeSettings;
@@ -113,6 +114,7 @@ pub struct Player {
     looks: Vec<Look>,
     draw_list: Vec<DrawItem>,
     events: Vec<FiredEvent>,
+    tracking: Tracking,
 }
 
 impl Player {
@@ -127,6 +129,7 @@ impl Player {
             looks: vec![Look::default(); parts],
             draw_list: Vec::new(),
             events: Vec::new(),
+            tracking: Tracking::default(),
         };
         player.update();
         Ok(player)
@@ -174,6 +177,7 @@ impl Player {
     /// Every parameter back to its default, simulations at rest, motions
     /// stopped.
     pub fn reset(&mut self) {
+        self.stop_tracking();
         self.runtime.stop(&mut self.model.rig);
         self.model.rig.reset_values();
         self.update();
@@ -261,11 +265,94 @@ impl Player {
         }
     }
 
+    /// Take over an edited copy of this model's rig, pose and simulation
+    /// output included, and redraw with it — how an editor previews its
+    /// rig live. Returns false, changing nothing, when the rig no longer
+    /// fits the model's parts (a mesh added, removed or re-meshed); build a
+    /// new model then.
+    pub fn sync_rig(&mut self, rig: &aether_rig::Rig) -> bool {
+        let fits = self.model.parts.iter().all(|part| {
+            match (self.model.rig.mesh(part.layer), rig.mesh(part.layer)) {
+                (Some(_), Some(mesh)) => mesh.vertices.len() == part.vertices.len(),
+                (None, None) => true,
+                _ => false,
+            }
+        });
+        if !fits {
+            return false;
+        }
+        self.model.rig = rig.clone();
+        self.update();
+        true
+    }
+
+    // ---- face tracking ----------------------------------------------------
+
+    /// Feed one face-tracker sample (see [`crate::tracking`] for the
+    /// conventions). The head, eyes, brows and mouth follow it, smoothed over
+    /// the following ticks. While tracking, auto-blink is paused so it does
+    /// not fight the tracked eyes, and look-at input is ignored.
+    pub fn track_face(&mut self, frame: &FaceFrame) {
+        if self.tracking.blink_was_enabled.is_none() {
+            let blink = &mut self.model.rig.behaviours.blink;
+            self.tracking.blink_was_enabled = Some(blink.enabled);
+            blink.enabled = false;
+        }
+        self.runtime.inputs.look = None;
+        self.tracking.targets = face_targets(
+            &self.model.rig,
+            frame,
+            &self.tracking.neutral,
+            &self.tracking.settings,
+        );
+        self.tracking.latest = Some(frame.clone());
+    }
+
+    /// Take the latest tracked face as the resting one: the angles and
+    /// expressions measured now become the model's neutral pose.
+    pub fn calibrate_tracking(&mut self) {
+        if let Some(latest) = self.tracking.latest.clone() {
+            self.tracking.neutral = latest.clone();
+            self.track_face(&latest);
+        }
+    }
+
+    /// Stop following the tracker: tracked parameters return to their
+    /// defaults and auto-blink resumes if it was on.
+    pub fn stop_tracking(&mut self) {
+        if let Some(enabled) = self.tracking.blink_was_enabled.take() {
+            self.model.rig.behaviours.blink.enabled = enabled;
+        }
+        for (id, _) in std::mem::take(&mut self.tracking.current) {
+            if let Some(default) = self.model.rig.parameter(id).map(|p| p.default) {
+                self.model.rig.set_value(id, default);
+            }
+        }
+        self.tracking.targets.clear();
+        self.tracking.latest = None;
+    }
+
+    /// True while a tracker is driving the model.
+    pub fn is_tracking(&self) -> bool {
+        self.tracking.latest.is_some()
+    }
+
+    /// How tracking maps onto the model (mirroring, smoothing, gains).
+    pub fn tracking_settings_mut(&mut self) -> &mut TrackingSettings {
+        &mut self.tracking.settings
+    }
+
     // ---- time -------------------------------------------------------------
 
     /// Advance `dt` seconds and recompute the pose.
     pub fn tick(&mut self, dt: f32) {
         let dt = if dt.is_finite() { dt.clamp(0.0, 0.25) } else { 0.0 };
+        if self.is_tracking() {
+            self.tracking.step(dt);
+            for &(id, value) in &self.tracking.current {
+                self.model.rig.set_value(id, value);
+            }
+        }
         self.collect_events(dt);
         self.runtime.tick(&mut self.model.rig, dt);
         self.update();

@@ -14,6 +14,9 @@ aether-raster.workspace = true
 aether-document.workspace = true
 aether-render.workspace = true
 aether-io.workspace = true
+aether-player.workspace = true
+aether-player-wgpu.workspace = true
+wgpu.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_dock.workspace = true
@@ -23,4 +26,5 @@ serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+pollster.workspace = true
 tempfile = "3"

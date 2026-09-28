@@ -48,6 +48,8 @@ aether-document           |             software renderer)
 `aether-player` sits beside the editor stack, not under it: it depends only
 on the rig and raster crates, so it compiles to a small WebAssembly module
 and a shared library with no document, UI or file-format code inside.
+`aether-player-wgpu` adds a GPU renderer on top of it, used by the editor
+(`aether-ui`) for its pose preview and available to any wgpu application.
 
 That ordering is what makes the project testable: 500+ of the tests run with no
 window, no GPU and no filesystem.
@@ -211,10 +213,10 @@ Document ─▶ runtime_model::export ─▶ model.json + texture atlases
                                       aether-player::Player
                           RigRuntime.tick ─▶ Rig::evaluate ─▶ draw list
                                                                │
-                  ┌──────────────┬───────────────┬─────────────┤
-                  ▼              ▼               ▼             ▼
-            WebGL (JS)     your engine (C)   cpu::render    Rust hosts
-            via WebAssembly
+        ┌───────────────┬──────────────┬───────────────┬─────────────┤
+        ▼               ▼              ▼               ▼             ▼
+  Godot node      WebGL (JS)     your engine (C)   cpu::render    Rust hosts
+  (GDExtension)   via WebAssembly                                 (wgpu)
 ```
 
 The player owns no rig logic of its own: it wraps the same `RigRuntime` and
@@ -225,6 +227,25 @@ interface — the WebAssembly module is that ABI compiled for `wasm32`, with no
 imports — so the web player and native hosts cannot disagree. The software
 renderer uses the compositor's own rasteriser and blend kernels, and the test
 suite holds every renderer to it. See [docs/RUNTIME.md](docs/RUNTIME.md).
+
+The Godot package (`runtime/godot`) links the player crate into a
+GDExtension and draws the list through Godot's `RenderingServer`: one canvas
+item per part with a per-blend-mode canvas shader. Screen, which Godot's
+fixed blend states cannot do in one pass, takes two (multiply by 1 − source,
+then add). Clipping uses a `CLIP_ONLY` canvas group shaped by the base at the
+base's opacity. The group mixes its children back in by the mask's alpha,
+which is the same as the software renderer's coverage-times-mask clipping.
+Its test draws a fixture with every drawing path in Godot and compares it
+with the software renderer.
+
+The editor reuses the same path for its **GPU pose preview**. While a rig
+tool is in hand, the canvas shows the pose drawn by `aether-player-wgpu` from
+a runtime model of the document, rebuilt when the edit history moves and fed
+the live rig (pose, physics, jiggle) every frame. Rig ticks then stop marking
+the composite dirty, and the first CPU frame afterwards redraws everything
+once. The preview is only used when it is exact — no export approximations,
+effects, masks or layer transforms — so the canvas never looks different
+depending on which path drew it; tests hold it to the CPU compositor.
 
 ## 6. Undo
 
@@ -268,8 +289,10 @@ mid-save cannot destroy the previous version.
 
 Layered PSD is read (raw and RLE channels, folders, masks, Unicode names) and
 written, because that is how artwork arrives for rigging. Animation exports
-to GIF, PNG sequences and sprite sheets with a JSON atlas, and rigged
-characters export as runtime models (section 5d).
+to GIF, APNG, PNG sequences and sprite sheets with a JSON atlas, and rigged
+characters export as runtime models (section 5d). Live2D motions and
+expressions are read and written, translating curves exactly where both
+formats have the shape and fitting Bézier runs where only Aether does.
 
 ## 9. Extensibility seams
 

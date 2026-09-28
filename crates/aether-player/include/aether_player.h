@@ -126,6 +126,21 @@ uint32_t aether_player_event_count(const AetherPlayer *p);
 const uint8_t *aether_player_event_name(const AetherPlayer *p, uint32_t index, size_t *len);
 int32_t aether_player_event_motion(const AetherPlayer *p, uint32_t index);
 
+/* Face tracking. Angles are degrees in the tracked person's frame: yaw
+ * toward their left, pitch up, roll toward their left shoulder. Shapes are
+ * the 52 ARKit/MediaPipe blend shapes in aether_blendshape_name() order;
+ * pass fewer and the rest count as zero. Auto-blink pauses while tracking. */
+uint32_t aether_blendshape_count(void);
+const uint8_t *aether_blendshape_name(uint32_t index, size_t *len);
+void aether_player_track_face(AetherPlayer *p, float yaw, float pitch, float roll, const float *shapes,
+                              uint32_t count);
+void aether_player_track_calibrate(AetherPlayer *p); /* the latest face becomes neutral */
+void aether_player_track_stop(AetherPlayer *p);
+uint32_t aether_player_is_tracking(const AetherPlayer *p);
+/* mirror: move like a mirror image (default 1). Non-finite floats keep their value. */
+void aether_player_track_settings(AetherPlayer *p, uint32_t mirror, float smoothing, float head_gain,
+                                  float body_follow, float mouth_gain);
+
 /* Geometry and drawing */
 uint32_t aether_player_part_count(const AetherPlayer *p);
 const uint8_t *aether_player_part_name(const AetherPlayer *p, uint32_t index, size_t *len);

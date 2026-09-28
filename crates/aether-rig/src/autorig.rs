@@ -199,6 +199,11 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
     if has(&n, &["brow", "眉", "まゆ"]) {
         return Role::Brow;
     }
+    // A whole eye painted on one layer ("Eye L", "左目") closes like an eye
+    // white. Checked after brows, so an "eyebrow" stays a brow.
+    if has(&n, &["eye", "目"]) {
+        return Role::EyeWhite;
+    }
     if mouth_context
         && has(
             &n,
@@ -709,6 +714,9 @@ mod tests {
             ("顔", &none, Role::Face),
             ("白目 左", &none, Role::EyeWhite),
             ("white", &eyes, Role::EyeWhite),
+            ("Eye L", &none, Role::EyeWhite),
+            ("左目", &none, Role::EyeWhite),
+            ("eyebrow L", &none, Role::Brow),
             ("瞳R", &none, Role::Iris),
             ("Iris L", &none, Role::Iris),
             ("まつ毛", &none, Role::Lash),

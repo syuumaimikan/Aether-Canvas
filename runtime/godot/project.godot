@@ -1,0 +1,20 @@
+; Aether Canvas models in Godot: the AetherModel2D node, a demo scene and tests.
+
+config_version=5
+
+[application]
+
+config/name="Aether Player for Godot"
+run/main_scene="res://demo.tscn"
+config/features=PackedStringArray("4.3")
+
+[display]
+
+window/size/viewport_width=512
+window/size/viewport_height=640
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(1, 1, 1, 1)

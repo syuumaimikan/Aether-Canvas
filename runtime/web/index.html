@@ -25,6 +25,9 @@
     color: var(--muted); pointer-events: none; }
   #message[hidden] { display: none; }
   #status { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+  #camera { position: absolute; right: 12px; bottom: 12px; width: 160px; border-radius: 8px; transform: scaleX(-1);
+    box-shadow: 0 2px 12px rgb(0 0 0 / .25); }
+  #camera[hidden] { display: none; }
   aside { width: 320px; flex: none; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px; }
   h1 { font-size: 16px; margin: 0 0 4px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; }
@@ -53,6 +56,7 @@
     <canvas id="canvas"></canvas>
     <div id="message">Loading…</div>
     <div id="status"></div>
+    <video id="camera" hidden muted playsinline></video>
   </div>
   <aside>
     <h1>Aether Player</h1>
@@ -66,8 +70,18 @@
     <h2>Motions</h2>
     <div class="buttons" id="motions"></div>
 
+    <h2>Recording</h2>
+    <div class="buttons"><button id="record">● Record video</button></div>
+
     <h2>Expressions</h2>
     <div class="buttons" id="expressions"></div>
+
+    <h2>Face tracking</h2>
+    <div class="buttons">
+      <button id="track">Track my face (webcam)</button>
+      <button id="calibrate" disabled>Calibrate</button>
+    </div>
+    <p class="lead" style="margin-top:6px">Runs MediaPipe in this page; video never leaves your device.</p>
 
     <h2>Behaviour</h2>
     <label class="toggle"><input type="checkbox" id="follow" checked> Look at the pointer</label>
@@ -81,12 +95,22 @@
 </main>
 <script type="module">
   import { AetherPlayer } from './aether-player.js';
+  import { startFaceTracking } from './aether-tracking.js';
 
   const canvas = document.getElementById('canvas');
   const message = document.getElementById('message');
   const status = document.getElementById('status');
   let player = null;
   let stopFollowing = null;
+  let tracking = null;
+  const query = new URLSearchParams(location.search);
+  // Self-hosted MediaPipe, if the page is given one (?vision=…&wasm=…&faceModel=…).
+  const trackingAssets = Object.fromEntries(
+    [['vision', 'vision'], ['wasm', 'wasm'], ['model', 'faceModel']]
+      .filter(([, key]) => query.has(key))
+      .map(([option, key]) => [option, query.get(key)]),
+  );
+  window.demo = { get player() { return player; }, get tracking() { return tracking; } };
 
   function show(text) {
     message.textContent = text;
@@ -100,7 +124,72 @@
     return b;
   }
 
+  function stopTracking() {
+    tracking?.stop();
+    tracking = null;
+    const camera = document.getElementById('camera');
+    camera.hidden = true;
+    document.getElementById('track').classList.remove('on');
+    document.getElementById('calibrate').disabled = true;
+  }
+
+  document.getElementById('track').addEventListener('click', async (e) => {
+    if (!player) return;
+    if (tracking) {
+      stopTracking();
+      applyToggles();
+      return;
+    }
+    e.target.disabled = true;
+    status.textContent = 'starting the camera…';
+    try {
+      const camera = document.getElementById('camera');
+      tracking = await startFaceTracking(player, { video: camera, ...trackingAssets });
+      camera.hidden = false;
+      // The face drives the head now: no idle motion, no pointer following.
+      player.stopMotions();
+      stopFollowing?.();
+      stopFollowing = null;
+      e.target.classList.add('on');
+      document.getElementById('calibrate').disabled = false;
+      status.textContent = 'tracking — look straight ahead and press Calibrate';
+    } catch (error) {
+      tracking = null;
+      status.textContent = `face tracking: ${error.message}`;
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+  document.getElementById('calibrate').addEventListener('click', () => tracking?.calibrate());
+
+  let recording = null;
+  document.getElementById('record').addEventListener('click', async (e) => {
+    if (!player) return;
+    if (!recording) {
+      try {
+        recording = player.record();
+        e.target.classList.add('on');
+        e.target.textContent = '■ Stop and save';
+      } catch (error) {
+        status.textContent = `recording: ${error.message}`;
+      }
+      return;
+    }
+    const video = await recording.stop();
+    recording = null;
+    e.target.classList.remove('on');
+    e.target.textContent = '● Record video';
+    const link = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(video),
+      download: `aether-recording.${video.type.includes('mp4') ? 'mp4' : 'webm'}`,
+    });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    status.textContent = `saved a ${(video.size / 1024).toFixed(0)} KB video`;
+  });
+
   function setUp(p) {
+    stopTracking();
     player?.dispose();
     player = p;
     stopFollowing = null;
@@ -161,7 +250,7 @@
     if (!player) return;
     player.setStage('physics', document.getElementById('physics').checked);
     player.setStage('behaviours', document.getElementById('behaviours').checked);
-    const follow = document.getElementById('follow').checked;
+    const follow = document.getElementById('follow').checked && !tracking;
     if (follow && !stopFollowing) stopFollowing = player.followPointer();
     if (!follow && stopFollowing) {
       stopFollowing();
@@ -189,7 +278,7 @@
     }
   });
 
-  const url = new URLSearchParams(location.search).get('model') ?? 'model/model.json';
+  const url = query.get('model') ?? 'model/model.json';
   AetherPlayer.load(canvas, url)
     .then(setUp)
     .catch((error) =>

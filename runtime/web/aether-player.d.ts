@@ -47,8 +47,32 @@ export interface MotionEvent {
 
 export type Stage = 'motions' | 'behaviours' | 'drivers' | 'physics' | 'jiggle';
 
+/**
+ * One face-tracker sample. Angles are degrees in the tracked person's frame:
+ * yaw toward their left, pitch up, roll toward their left shoulder.
+ */
+export interface FaceSample {
+  yaw?: number;
+  pitch?: number;
+  roll?: number;
+  /** MediaPipe categories, { name: weight }, or weights in runtime.blendshapes order. */
+  shapes?: { categoryName: string; score: number }[] | Record<string, number> | ArrayLike<number>;
+}
+
+export interface TrackingOptions {
+  /** Move like a mirror image of the person (default true). */
+  mirror?: boolean;
+  /** Smoothing time constant, seconds. */
+  smoothing?: number;
+  headGain?: number;
+  bodyFollow?: number;
+  mouthGain?: number;
+}
+
 /** The WebAssembly module. One runtime can host any number of models. */
 export class AetherRuntime {
+  /** Blend shape names, in the order face samples carry them (ARKit / MediaPipe naming). */
+  readonly blendshapes: string[];
   static instantiate(
     source?: BufferSource | Response | Promise<Response> | URL | string,
   ): Promise<AetherRuntime>;
@@ -85,6 +109,13 @@ export class AetherModel {
   /** Voice loudness 0..1 and brightness -1..1, for lip sync. */
   setAudio(level: number, brightness?: number): void;
   setStage(stage: Stage | number, enabled: boolean): void;
+  /** Feed one face-tracker sample; auto-blink pauses while tracking. */
+  trackFace(sample: FaceSample): void;
+  /** Make the latest tracked face the neutral one. */
+  calibrateTracking(): void;
+  stopTracking(): void;
+  readonly tracking: boolean;
+  setTrackingOptions(options: TrackingOptions): void;
   /** Advance `dt` seconds. Returns the motion events passed. */
   tick(dt: number): MotionEvent[];
   /** Recompute the pose without advancing time. */
@@ -155,6 +186,11 @@ export class AetherPlayer {
   followPointer(options?: { element?: EventTarget; center?: [number, number]; reach?: number }): () => void;
   /** Emit 'hit' for taps on parts. Returns a function that stops. */
   enableHitTest(): () => void;
+  /** Record the canvas as video (WebM where supported); `stop()` resolves to the file. */
+  record(options?: { fps?: number; mimeType?: string; bitsPerSecond?: number }): {
+    stop(): Promise<Blob>;
+    mimeType: string;
+  };
   /** Lip sync from an <audio>/<video> element or a MediaStream. Returns a function that stops. */
   lipSync(source: HTMLMediaElement | MediaStream, options?: { gain?: number }): () => void;
   dispose(): void;

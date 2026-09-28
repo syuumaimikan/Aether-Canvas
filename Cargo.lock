@@ -35,15 +35,19 @@ dependencies = [
  "aether-document",
  "aether-io",
  "aether-player",
+ "aether-player-wgpu",
  "aether-raster",
  "aether-render",
  "aether-ui",
  "eframe",
  "egui",
+ "pollster",
+ "rayon",
  "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "wgpu",
 ]
 
 [[package]]
@@ -67,6 +71,7 @@ dependencies = [
  "aether-raster",
  "aether-render",
  "image",
+ "png",
  "serde",
  "serde_json",
  "tempfile",
@@ -82,6 +87,22 @@ dependencies = [
  "aether-rig",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aether-player-wgpu"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-document",
+ "aether-io",
+ "aether-player",
+ "aether-raster",
+ "aether-render",
+ "bytemuck",
+ "pollster",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]
@@ -122,16 +143,20 @@ dependencies = [
  "aether-core",
  "aether-document",
  "aether-io",
+ "aether-player",
+ "aether-player-wgpu",
  "aether-raster",
  "aether-render",
  "eframe",
  "egui",
  "egui_dock",
+ "pollster",
  "rfd",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]

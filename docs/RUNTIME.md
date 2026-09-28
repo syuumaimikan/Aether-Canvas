@@ -7,9 +7,11 @@ ships **one runtime, `aether-player`**, that plays it everywhere:
 | Host | How | Status |
 | --- | --- | --- |
 | Web pages | `runtime/web/aether-player.js` + `aether_player.wasm` (≈190 KB gzipped), WebGL 1 or 2 | Tested in headless Chromium against the software renderer |
+| Godot 4.2+ | `runtime/godot`: the `AetherModel2D` node (a GDExtension), scripted from GDScript | Tested in Godot 4.3: logic headless, and drawing with all three renderers (Compatibility, Forward+, Mobile) against the software renderer |
 | JavaScript without a DOM | `AetherRuntime` / `AetherModel` from the same file | Tested in Node |
-| C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes, Godot GDExtension…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
+| C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
 | Rust | The `aether-player` crate | Tested |
+| Rust engines on wgpu (Bevy and others), any Vulkan/Metal/DX12/GL/WebGPU app | `aether-player-wgpu`: `GpuPlayer::prepare` + `paint` into your render pass, or `render` into a texture | Checked against the software renderer on Mesa's Vulkan driver |
 | Servers, thumbnails, CI | `aether_player::cpu`, a software renderer | The reference the others are checked against |
 
 The player runs **the same rig code as the editor** — keyforms, deformers,
@@ -134,6 +136,33 @@ Inputs:
 * **Hit testing** — `hit_test(x, y)` returns the topmost visible part under
   a document point, for tap reactions.
 
+### Face tracking
+
+Any face tracker that reports head angles and the 52 standard blend shapes
+(ARKit on iPhones, MediaPipe in browsers, most VTuber tracking apps) drives
+a model through one call:
+
+```rust
+use aether_player::FaceFrame;
+let mut face = FaceFrame { yaw, pitch, roll, ..Default::default() };
+face.set_shape("jawOpen", 0.4);
+face.set_shape("eyeBlinkLeft", 0.9);
+player.track_face(&face);      // every tracker frame
+player.calibrate_tracking();   // "this is my neutral face"
+player.tick(dt);               // smoothing happens here
+```
+
+Frames use the tracked person's frame of reference, as trackers report
+them: yaw toward their left, pitch up, roll toward their left shoulder, and
+`…Left` shapes belong to their left side. The player maps them onto the
+standard parameters (`AngleX/Y/Z`, `EyeBallX/Y`, `EyeL/ROpen`, `EyeL/RSmile`,
+`BrowL/RY`, `MouthOpenY`, `MouthForm`, and the body following the head
+unless a driver already does), smoothed, measured against the calibrated
+neutral face, and mirrored by default so the model moves like the person's
+reflection. Auto-blink pauses while the eyes are tracked. The web player's
+`aether-tracking.js` does all of this from a webcam with MediaPipe; the C API
+has `aether_player_track_face` and friends.
+
 ### Drawing rules
 
 Textures are straight-alpha PNGs. Premultiply on upload and blend
@@ -204,6 +233,22 @@ player.lipSync(await navigator.mediaDevices.getUserMedia({ audio: true }));
 player.start();
 ```
 
+## Godot
+
+See [runtime/godot/README.md](../runtime/godot/README.md). Copy
+`addons/aether/` into a project, add an `AetherModel2D` node, point its
+**Model Path** at `model.json`, and script it:
+
+```gdscript
+model.play_motion("Idle", false)
+model.look_toward(Vector2(0.3, 0.1))
+model.track_face(yaw, pitch, roll, {"jawOpen": 0.4, "eyeBlinkLeft": 1.0})
+if model.hit_test(model.get_local_mouse_position()) == "Face":
+    model.set_expression("Smile")
+```
+
+![The Godot demo scene](images/godot-demo.png)
+
 ## How it is kept honest
 
 * `aether-io` exports a scene that uses every export path (a rigged mesh
@@ -217,8 +262,19 @@ player.start();
   draws each pose with WebGL 1 and WebGL 2 and compares against the software
   renderer (mean difference about 0.01 levels; the rare larger ones are single
   pixels on degenerate slivers, where GPUs snap vertices to 1/256 px).
+* In Godot 4.3, `runtime/godot/test.sh` exercises the node's API headless,
+  then draws the demo character and a fixture with every drawing path. The
+  fixture has clipping to a fading, tinted mesh, plus multiply, screen, add
+  and translucency. Each renderer (Compatibility, Forward+, Mobile) must
+  match the software renderer, and the mean difference is at most 0.13
+  levels.
 * An end-to-end test turns a PSD into a model with the real
   `aether-canvas --auto-rig --export-model` binary and plays it.
+* Face tracking is checked where it shows: on an auto-rigged face, turning,
+  tipping, winking and calibrating move the drawn parts the right way on
+  screen, mirrored and not; and in headless Chromium, MediaPipe tracks a real
+  photo of a face turned ±20° on screen and the model tilts to match (roll
+  measured within a degree of the turn).
 * `cargo test` compiles `runtime/c/play.c` against the header with
   `-Wall -Wextra -Werror`, links it to the shared library and checks what it
   prints, so the header, the exported symbols and the struct layout cannot

@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Face tracking</title>
+<canvas id="canvas" style="width:256px;height:320px"></canvas>
+<script type="module">
+  import { AetherPlayer } from '../aether-player.js';
+  import { startFaceTracking } from '../aether-tracking.js';
+
+  // Track a photo of a face turned by `angle` degrees clockwise on screen,
+  // streamed from a canvas as if it came from a camera.
+  window.runTracking = async (angle) => {
+    const photo = new Image();
+    photo.src = 'tracking-assets/face.png';
+    await photo.decode();
+    const source = document.createElement('canvas');
+    source.width = photo.width;
+    source.height = photo.height;
+    const context = source.getContext('2d');
+    // Turn about the face (the upper middle of the photo) so it stays in frame.
+    const [cx, cy] = [photo.width * 0.44, photo.height * 0.24];
+    const draw = () => {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, source.width, source.height);
+      context.translate(cx, cy);
+      context.rotate((angle * Math.PI) / 180);
+      context.translate(-cx, -cy);
+      context.drawImage(photo, 0, 0);
+    };
+    draw();
+    const timer = setInterval(draw, 33);
+    const stream = source.captureStream(30);
+
+    const player = await AetherPlayer.load(document.getElementById('canvas'), '../model/model.json');
+    player.stopMotions();
+    player.start();
+    const tracking = await startFaceTracking(player, {
+      stream,
+      calibrate: 'manual',
+      delegate: 'CPU',
+      vision: './tracking-assets/package/vision_bundle.mjs',
+      wasm: './tracking-assets/package/wasm',
+      model: './tracking-assets/face_landmarker.task',
+    });
+    const start = performance.now();
+    while (tracking.state.faces < 15 && performance.now() - start < 30000) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // Let the smoothing settle.
+    await new Promise((r) => setTimeout(r, 600));
+    const result = {
+      frames: tracking.state.frames,
+      faces: tracking.state.faces,
+      pose: tracking.state.pose,
+      tracking: player.model.tracking,
+      angleX: player.parameter('AngleX'),
+      angleZ: player.parameter('AngleZ'),
+    };
+    tracking.stop();
+    result.afterStop = { tracking: player.model.tracking, angleZ: player.parameter('AngleZ') };
+    clearInterval(timer);
+    player.dispose();
+    return result;
+  };
+</script>

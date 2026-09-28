@@ -119,6 +119,22 @@ impl Pass<'_> {
         self.pose.as_ref()?.mesh(id).filter(|m| !m.rest)
     }
 
+    /// Where a layer's pixels can be, when that is cheaply known to be less
+    /// than the whole pass: a deformed mesh with no effects or transform
+    /// draws only inside its posed bounds. Compositing outside it would
+    /// visit nothing but transparent pixels.
+    fn content_limit(&self, layer: &Layer) -> IRect {
+        if layer.has_effects() || !layer.transform.is_identity() {
+            return self.region;
+        }
+        match (&layer.content, self.deformed(layer.id)) {
+            (LayerContent::Raster(_), Some(pose)) => {
+                pose.bounds().to_irect_outer().expanded(1).intersect(&self.region)
+            }
+            _ => self.region,
+        }
+    }
+
     /// Keyed draw-order offset of a layer.
     fn draw_order(&self, id: LayerId) -> f32 {
         self.pose
@@ -287,6 +303,10 @@ impl Compositor {
             }
         }
 
+        let limit = pass.content_limit(layer);
+        if limit.is_empty() {
+            return;
+        }
         let Some(source) = self.layer_source(pass, layer, backdrop) else {
             return;
         };
@@ -294,7 +314,7 @@ impl Compositor {
             blend: layer.blend_mode,
             opacity: layer.opacity,
             offset: (0, 0),
-            region: Some(pass.region),
+            region: Some(limit),
             alpha_lock: false,
         };
         composite_pixmap(backdrop, &source, &opts, layer.active_mask());
@@ -308,6 +328,11 @@ impl Compositor {
         clipped: &[LayerId],
         backdrop: &mut Pixmap,
     ) {
+        // Nothing in the group can show outside the base.
+        let limit = pass.content_limit(base);
+        if limit.is_empty() {
+            return;
+        }
         let Some(base_pixels) = self.layer_source(pass, base, backdrop) else {
             return;
         };
@@ -333,7 +358,7 @@ impl Compositor {
                 blend: layer.blend_mode,
                 opacity: layer.opacity,
                 offset: (0, 0),
-                region: Some(pass.region),
+                region: Some(limit),
                 alpha_lock: false,
             };
             composite_pixmap(&mut group, &source, &opts, Some(&mask));
@@ -343,7 +368,7 @@ impl Compositor {
             blend: base.blend_mode,
             opacity: base.opacity,
             offset: (0, 0),
-            region: Some(pass.region),
+            region: Some(limit),
             alpha_lock: false,
         };
         composite_pixmap(backdrop, &group, &opts, base.active_mask());
@@ -367,7 +392,7 @@ impl Compositor {
                 (Some(pose), Some(mesh)) => {
                     let mut deformed = Pixmap::new(doc.width, doc.height);
                     let opts = MeshDrawOptions {
-                        region,
+                        region: pass.content_limit(layer),
                         opacity: pose.opacity,
                         multiply: pose.multiply,
                         screen: pose.screen,

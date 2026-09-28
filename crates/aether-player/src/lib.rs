@@ -8,6 +8,8 @@
 //!   tree and the rig.
 //! * [`player`] — [`Player`]: parameters, motions, expressions, look-at, lip
 //!   sync, physics, motion events, hit testing, and a per-frame draw list.
+//! * [`tracking`] — face tracking: head angles and the standard 52 blend
+//!   shapes from any tracker, mapped onto the standard parameters.
 //! * [`cpu`] — a software renderer, the reference for GPU renderers.
 //! * [`ffi`] — the C ABI, which is also the WebAssembly interface used by
 //!   the JavaScript/WebGL player in `runtime/web`.
@@ -38,6 +40,8 @@ pub mod cpu;
 pub mod ffi;
 pub mod model;
 pub mod player;
+pub mod tracking;
 
 pub use model::{BlendKind, Model, ModelError, Node, Part, Texture};
 pub use player::{DrawItem, FiredEvent, Player, Stage};
+pub use tracking::{FaceFrame, TrackingSettings};

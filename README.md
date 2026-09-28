@@ -70,7 +70,11 @@ project, one document model and one timeline.
   layered motions with crossfades, expressions, auto-blink, breathing,
   look-at and lip sync baked from WAV
 - Rigged layers keep every blend mode, mask, clipping group and effect
-- Export GIF, PNG sequences and sprite sheets; import and export layered PSD
+- Export GIF, APNG (full colour, soft transparency), PNG sequences and
+  sprite sheets; import and export layered PSD
+- Import and export Live2D motions (`.motion3.json`) and expressions
+  (`.exp3.json`): bring them along, or animate existing Live2D models with
+  Aether's timeline
 - An honest comparison with Live2D Cubism is in
   [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
 
@@ -86,13 +90,29 @@ project, one document model and one timeline.
 - Web player: WebAssembly (≈190 KB gzipped) + WebGL 1/2, a drop-in
   `<canvas>` component with pointer following, tap events and microphone lip
   sync; about 0.8 ms per frame for the demo character
-- A C ABI with a header for native engines and apps, a Rust crate, and a
+- **Webcam face tracking** built in: head, eyes, blinks, gaze, brows and
+  mouth follow your face (MediaPipe, running on the device), mirrored like a
+  reflection; any ARKit/MediaPipe-style tracker drives a model through the
+  same API on every platform
+- **A Godot 4 package**: the `AetherModel2D` node plays models with every
+  rig feature, clipping and all four blend modes, from GDScript; drawn the
+  same by all three Godot renderers (tested in Godot against the software
+  renderer)
+- A C ABI with a header for native engines and apps, a Rust crate, a wgpu
+  renderer (Vulkan, Metal, DirectX 12, OpenGL, WebGPU) for Rust engines, and a
   software renderer for servers and tests
+- The editor previews poses with that GPU renderer whenever the result is
+  exact, so posing and playback skip CPU compositing
 - Parity-tested: WebGL in headless Chromium and the software renderer
   against the editor's compositor, WebAssembly against native, and a C
   program against the header
 
 ![The web player](docs/images/web-player.png)
+
+![Face tracking in the web player](docs/images/face-tracking.png)
+
+*Face tracking in the web player, fed by a fake camera in headless Chromium.
+Photo: NASA, public domain.*
 
 **Canvas**
 - GPU-accelerated view (wgpu) with pan, zoom, rotation, mirror and a pixel grid
@@ -160,6 +180,14 @@ node runtime/web/test/serve.mjs        # open http://localhost:8080/
 node --test runtime/web/test/*.test.mjs
 ```
 
+### The Godot package
+
+```sh
+runtime/godot/build.sh                 # the extension and the demo model
+godot --path runtime/godot             # the demo scene
+GODOT=godot runtime/godot/test.sh      # logic headless, drawing under Xvfb
+```
+
 ## Repository layout
 
 ```text
@@ -175,9 +203,12 @@ crates/
                     animation and runtime-model export
   aether-player/    the runtime: model format, player, C ABI (also the
                     WebAssembly interface), software renderer
+  aether-player-wgpu/ GPU renderer for players: the editor's pose preview and
+                    the way into wgpu-based engines
   aether-ui/        panels, tools, docking layout, application shell
 apps/desktop/       the binary, plus end-to-end tests and examples
 runtime/web/        the JavaScript/WebGL player, demo page and browser tests
+runtime/godot/      the Godot 4 extension (AetherModel2D), demo and tests
 runtime/c/          a C example, compiled and run by the test suite
 docs/               architecture notes and the file-format specification
 ```
