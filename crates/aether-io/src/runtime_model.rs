@@ -288,6 +288,12 @@ impl<'a> Walker<'a> {
                 LayerContent::Adjustment(_) => {
                     self.warn(format!("adjustment layer \"{}\" is left out", base.name));
                 }
+                LayerContent::Live2D(_) => {
+                    self.warn(format!(
+                        "Live2D model \"{}\" is left out (export it as a Live2D model instead)",
+                        base.name
+                    ));
+                }
                 LayerContent::Custom { kind, .. } => {
                     self.warn(format!("plugin layer \"{}\" ({kind}) is left out", base.name));
                 }

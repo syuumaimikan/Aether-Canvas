@@ -156,14 +156,22 @@ pub fn import_motion(json: &str, rig: &Rig, name: &str) -> Result<(Motion, Vec<S
         motion.fade_out = fade;
     }
     for curve in &file.curves {
-        if curve.target != "Parameter" {
+        // Part opacity curves drive a part parameter of the same name, when
+        // the rig has one (an imported Live2D model's switched parts).
+        let part = curve.target == "PartOpacity" && rig.parameter_named(&curve.id).is_some();
+        if curve.target != "Parameter" && !part {
             notes.push(format!(
                 "{} curve {:?} left out (no equivalent)",
                 curve.target, curve.id
             ));
             continue;
         }
-        let Some(param) = resolve_id(rig, &curve.id) else {
+        let resolved = if part {
+            rig.parameter_named(&curve.id).map(|p| p.id)
+        } else {
+            resolve_id(rig, &curve.id)
+        };
+        let Some(param) = resolved else {
             notes.push(format!("curve for {:?} left out (no such parameter)", curve.id));
             continue;
         };

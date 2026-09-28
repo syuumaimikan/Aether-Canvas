@@ -18,8 +18,11 @@
 // bound; `max().min()` does the same, `clamp` would keep the NaN.
 #![allow(clippy::manual_clamp)]
 
+pub mod base64;
 pub mod moc3;
 pub mod model;
+pub mod physics;
 
 pub use moc3::{Moc, MocError};
 pub use model::Model;
+pub use physics::Physics;

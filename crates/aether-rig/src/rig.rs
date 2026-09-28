@@ -66,6 +66,8 @@ pub struct Dynamics {
     pub values: Option<ParamValues>,
     /// Per-vertex offsets from jiggle, added after all deformation.
     pub offsets: BTreeMap<LayerId, Vec<Vec2>>,
+    /// Live2D part opacities after pose fades, by model layer.
+    pub cubism_parts: BTreeMap<LayerId, Vec<f32>>,
 }
 
 /// A complete rig.
@@ -101,6 +103,9 @@ pub struct Rig {
     /// Procedural behaviours (blinking, breathing, look-at, lip sync).
     #[serde(default)]
     pub behaviours: Behaviours,
+    /// Imported Live2D models, each drawn on its own layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cubism: Vec<crate::cubism::CubismRig>,
     /// Simulation output; not saved.
     #[serde(skip)]
     pub dynamics: Dynamics,
@@ -151,7 +156,7 @@ impl Rig {
 
     /// True when the rig deforms nothing, so rendering can skip it entirely.
     pub fn is_inert(&self) -> bool {
-        self.meshes.is_empty()
+        self.meshes.is_empty() && self.cubism.is_empty()
     }
 
     // ------------------------------------------------------------ parameters
@@ -243,6 +248,9 @@ impl Rig {
             expression.entries.retain(|e| e.param != id);
         }
         self.behaviours.forget_parameter(id);
+        for model in &mut self.cubism {
+            model.forget_parameter(id);
+        }
         self.values.remove(&id);
         self.parameters.retain(|p| p.id != id);
         Ok(())
@@ -1146,7 +1154,24 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
-        RigPose { meshes }
+        let cubism = self
+            .rig
+            .cubism
+            .iter()
+            .map(|c| {
+                match self
+                    .rig
+                    .dynamics
+                    .cubism_parts
+                    .get(&c.layer)
+                    .filter(|_| self.include_dynamics)
+                {
+                    Some(parts) => c.evaluate_with_parts(&self.params, parts),
+                    None => c.evaluate(&self.params),
+                }
+            })
+            .collect();
+        RigPose { meshes, cubism }
     }
 }
 

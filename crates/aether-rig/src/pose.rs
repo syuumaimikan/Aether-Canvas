@@ -57,6 +57,8 @@ impl MeshPose {
 pub struct RigPose {
     /// Mesh poses by layer.
     pub meshes: BTreeMap<LayerId, MeshPose>,
+    /// Live2D models, one per model layer.
+    pub cubism: Vec<crate::cubism::CubismPose>,
 }
 
 /// What changed between two poses, for incremental re-rendering.
@@ -82,6 +84,11 @@ impl RigPose {
     /// The pose of one layer's mesh.
     pub fn mesh(&self, layer: LayerId) -> Option<&MeshPose> {
         self.meshes.get(&layer)
+    }
+
+    /// The pose of the Live2D model drawn on `layer`.
+    pub fn cubism(&self, layer: LayerId) -> Option<&crate::cubism::CubismPose> {
+        self.cubism.iter().find(|c| c.layer == layer)
     }
 
     /// What needs redrawing to go from `self` to `next`.
@@ -113,6 +120,26 @@ impl RigPose {
             if !next.meshes.contains_key(layer) {
                 add(before, &mut change);
                 change.toggled.push(*layer);
+            }
+        }
+        // A Live2D model redraws as a whole wherever it was or now is.
+        for after in &next.cubism {
+            match self.cubism(after.layer) {
+                Some(before) if before == after => {}
+                Some(before) => {
+                    change.area = change.area.union(&before.bounds().to_irect_outer().expanded(2));
+                    change.area = change.area.union(&after.bounds().to_irect_outer().expanded(2));
+                }
+                None => {
+                    change.area = change.area.union(&after.bounds().to_irect_outer().expanded(2));
+                    change.toggled.push(after.layer);
+                }
+            }
+        }
+        for before in &self.cubism {
+            if next.cubism(before.layer).is_none() {
+                change.area = change.area.union(&before.bounds().to_irect_outer().expanded(2));
+                change.toggled.push(before.layer);
             }
         }
         change

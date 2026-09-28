@@ -117,6 +117,14 @@ pub struct FillContent {
     pub color: Rgba8,
 }
 
+/// A Live2D model: its texture pages. The model's deformation data and
+/// parameter links are in the rig (`Rig::cubism`), which draws it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Live2DContent {
+    /// Texture atlas pages, straight alpha, as in the model's PNG files.
+    pub textures: Vec<Pixmap>,
+}
+
 /// What a layer actually contains.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LayerContent {
@@ -128,6 +136,8 @@ pub enum LayerContent {
     Adjustment(AdjustmentContent),
     /// A flat colour fill.
     Fill(FillContent),
+    /// A Live2D model.
+    Live2D(Live2DContent),
     /// Content owned by a plugin.
     ///
     /// The core application preserves `kind` and `payload` verbatim across
@@ -152,6 +162,8 @@ pub enum LayerKind {
     Adjustment,
     /// [`LayerContent::Fill`].
     Fill,
+    /// [`LayerContent::Live2D`].
+    Live2D,
     /// [`LayerContent::Custom`].
     Custom,
 }
@@ -164,6 +176,7 @@ impl LayerKind {
             LayerKind::Group => "Group",
             LayerKind::Adjustment => "Adjustment",
             LayerKind::Fill => "Fill",
+            LayerKind::Live2D => "Live2D",
             LayerKind::Custom => "Custom",
         }
     }
@@ -256,6 +269,7 @@ impl Layer {
             LayerContent::Group(_) => LayerKind::Group,
             LayerContent::Adjustment(_) => LayerKind::Adjustment,
             LayerContent::Fill(_) => LayerKind::Fill,
+            LayerContent::Live2D(_) => LayerKind::Live2D,
             LayerContent::Custom { .. } => LayerKind::Custom,
         }
     }

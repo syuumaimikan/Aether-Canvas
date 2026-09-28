@@ -28,7 +28,8 @@ use aether_core::id::IdGenerator;
 use aether_core::math::Transform2D;
 use aether_core::{AetherError, LayerId, Result};
 use aether_document::layer::{
-    AdjustmentContent, ColorLabel, FillContent, GroupContent, Layer, LayerContent, RasterContent,
+    AdjustmentContent, ColorLabel, FillContent, GroupContent, Layer, LayerContent, Live2DContent,
+    RasterContent,
 };
 use aether_document::selection::Selection;
 use aether_document::tree::LayerTree;
@@ -128,6 +129,9 @@ enum LayerContentDto {
     Adjustment { adjustment: Adjustment },
     /// A flat fill.
     Fill { color: Rgba8 },
+    /// A Live2D model's texture pages at the given archive paths (the model
+    /// itself is in the rig).
+    Live2D { textures: Vec<String> },
     /// Plugin-owned content, preserved verbatim.
     Custom {
         kind: String,
@@ -214,6 +218,15 @@ pub fn serialize_project(doc: &Document) -> Result<Vec<u8>> {
                     adjustment: a.adjustment.clone(),
                 },
                 LayerContent::Fill(f) => LayerContentDto::Fill { color: f.color },
+                LayerContent::Live2D(model) => {
+                    let mut textures = Vec::new();
+                    for (i, page) in model.textures.iter().enumerate() {
+                        let path = format!("live2d/{}/texture_{i}.png", layer.id.raw());
+                        blobs.insert(path.clone(), encode_pixmap_png(page)?);
+                        textures.push(path);
+                    }
+                    LayerContentDto::Live2D { textures }
+                }
                 LayerContent::Custom { kind, payload } => LayerContentDto::Custom {
                     kind: kind.clone(),
                     payload: payload.clone(),
@@ -390,6 +403,16 @@ pub fn deserialize_project(bytes: &[u8]) -> Result<Document> {
                 LayerContent::Adjustment(AdjustmentContent { adjustment })
             }
             LayerContentDto::Fill { color } => LayerContent::Fill(FillContent { color }),
+            LayerContentDto::Live2D { textures } => {
+                let mut pages = Vec::new();
+                for path in textures {
+                    pages.push(match blobs.get(&path) {
+                        Some(bytes) => decode_image(bytes)?,
+                        None => Pixmap::new(1, 1),
+                    });
+                }
+                LayerContent::Live2D(Live2DContent { textures: pages })
+            }
             LayerContentDto::Custom { kind, payload } => LayerContent::Custom { kind, payload },
         };
         let mask = dto_layer
