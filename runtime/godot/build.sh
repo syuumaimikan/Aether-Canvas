@@ -28,7 +28,10 @@ done
 if [ ! -f "$root/runtime/web/model/model.json" ]; then
     "$root/runtime/web/build.sh" --demo
 fi
-rm -rf "$here/model" "$here/test/reference"
+rm -rf "$here/model" "$here/test/reference" "$here/test/fixture"
 cp -r "$root/runtime/web/model" "$here/model"
 cp -r "$root/runtime/web/test/reference" "$here/test/reference"
+# A scene with every drawing path (clipping, every blend mode, tint,
+# opacity), with the software player's renders, for the tests.
+(cd "$root" && cargo run -q -p aether-player-wgpu --example draw_fixture -- "$here/test/fixture")
 echo "built the extension and copied the demo model into $here"

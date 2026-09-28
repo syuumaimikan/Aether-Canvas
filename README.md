@@ -94,6 +94,10 @@ project, one document model and one timeline.
   mouth follow your face (MediaPipe, running on the device), mirrored like a
   reflection; any ARKit/MediaPipe-style tracker drives a model through the
   same API on every platform
+- **A Godot 4 package**: the `AetherModel2D` node plays models with every
+  rig feature, clipping and all four blend modes, from GDScript; drawn the
+  same by all three Godot renderers (tested in Godot against the software
+  renderer)
 - A C ABI with a header for native engines and apps, a Rust crate, a wgpu
   renderer (Vulkan, Metal, DirectX 12, OpenGL, WebGPU) for Rust engines, and a
   software renderer for servers and tests
@@ -176,6 +180,14 @@ node runtime/web/test/serve.mjs        # open http://localhost:8080/
 node --test runtime/web/test/*.test.mjs
 ```
 
+### The Godot package
+
+```sh
+runtime/godot/build.sh                 # the extension and the demo model
+godot --path runtime/godot             # the demo scene
+GODOT=godot runtime/godot/test.sh      # logic headless, drawing under Xvfb
+```
+
 ## Repository layout
 
 ```text
@@ -196,6 +208,7 @@ crates/
   aether-ui/        panels, tools, docking layout, application shell
 apps/desktop/       the binary, plus end-to-end tests and examples
 runtime/web/        the JavaScript/WebGL player, demo page and browser tests
+runtime/godot/      the Godot 4 extension (AetherModel2D), demo and tests
 runtime/c/          a C example, compiled and run by the test suite
 docs/               architecture notes and the file-format specification
 ```

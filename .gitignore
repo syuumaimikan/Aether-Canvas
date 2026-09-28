@@ -13,4 +13,5 @@ Cargo.lock.bak
 /runtime/godot/addons/aether/bin/
 /runtime/godot/model/
 /runtime/godot/test/reference/
+/runtime/godot/test/fixture/
 /runtime/godot/.godot/

@@ -213,10 +213,10 @@ Document ─▶ runtime_model::export ─▶ model.json + texture atlases
                                       aether-player::Player
                           RigRuntime.tick ─▶ Rig::evaluate ─▶ draw list
                                                                │
-                  ┌──────────────┬───────────────┬─────────────┤
-                  ▼              ▼               ▼             ▼
-            WebGL (JS)     your engine (C)   cpu::render    Rust hosts
-            via WebAssembly
+        ┌───────────────┬──────────────┬───────────────┬─────────────┤
+        ▼               ▼              ▼               ▼             ▼
+  Godot node      WebGL (JS)     your engine (C)   cpu::render    Rust hosts
+  (GDExtension)   via WebAssembly                                 (wgpu)
 ```
 
 The player owns no rig logic of its own: it wraps the same `RigRuntime` and
@@ -227,6 +227,16 @@ interface — the WebAssembly module is that ABI compiled for `wasm32`, with no
 imports — so the web player and native hosts cannot disagree. The software
 renderer uses the compositor's own rasteriser and blend kernels, and the test
 suite holds every renderer to it. See [docs/RUNTIME.md](docs/RUNTIME.md).
+
+The Godot package (`runtime/godot`) links the player crate into a
+GDExtension and draws the list through Godot's `RenderingServer`: one canvas
+item per part with a per-blend-mode canvas shader. Screen, which Godot's
+fixed blend states cannot do in one pass, takes two (multiply by 1 − source,
+then add). Clipping uses a `CLIP_ONLY` canvas group shaped by the base at the
+base's opacity. The group mixes its children back in by the mask's alpha,
+which is the same as the software renderer's coverage-times-mask clipping.
+Its test draws a fixture with every drawing path in Godot and compares it
+with the software renderer.
 
 The editor reuses the same path for its **GPU pose preview**. While a rig
 tool is in hand, the canvas shows the pose drawn by `aether-player-wgpu` from

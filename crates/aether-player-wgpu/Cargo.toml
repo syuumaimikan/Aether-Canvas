@@ -20,3 +20,4 @@ aether-document.workspace = true
 aether-io.workspace = true
 aether-render.workspace = true
 pollster.workspace = true
+serde_json.workspace = true

@@ -22,27 +22,50 @@ struct AetherExtension;
 #[gdextension]
 unsafe impl ExtensionLibrary for AetherExtension {}
 
-/// The canvas shader for one blend mode. Textures are premultiplied on
-/// load; tint follows the runtime's model (multiply, then screen, on
-/// straight colour).
-fn shader_code(blend: BlendKind) -> String {
-    let (render_mode, output) = match blend {
-        BlendKind::Normal => ("blend_premul_alpha", "COLOR = vec4(rgb, c.a) * opacity;"),
+/// One drawing pass of a part. Every blend mode is one pass except
+/// screen, which Godot's fixed blend modes reach in two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Pass {
+    Normal,
+    Multiply,
+    Add,
+    /// Screen, first pass: the destination times (1 - Cs).
+    ScreenDarken,
+    /// Screen, second pass: plus Cs.
+    ScreenLighten,
+}
+
+impl Pass {
+    fn for_blend(blend: BlendKind) -> (Pass, Option<Pass>) {
+        match blend {
+            BlendKind::Normal => (Pass::Normal, None),
+            BlendKind::Multiply => (Pass::Multiply, None),
+            BlendKind::Add => (Pass::Add, None),
+            BlendKind::Screen => (Pass::ScreenDarken, Some(Pass::ScreenLighten)),
+        }
+    }
+}
+
+/// The canvas shader for one pass. Textures are premultiplied on load;
+/// tint follows the runtime's model (multiply, then screen, on straight
+/// colour). The blends are exact over opaque artwork, which is what a
+/// character is drawn onto (the software player's reference).
+fn shader_code(pass: Pass) -> String {
+    let (render_mode, output) = match pass {
+        // Premultiplied source-over.
+        Pass::Normal => ("blend_premul_alpha", "COLOR = vec4(rgb, c.a) * opacity;"),
         // Godot multiplies the destination by the output. Writing
-        // Cs + (1 - αs) makes that Cs·Cd + Cd·(1 - αs): premultiplied
-        // multiply over opaque artwork.
-        BlendKind::Multiply => (
+        // Cs + (1 - αs) makes that Cd·Cs + Cd·(1 - αs): the separable
+        // multiply of a premultiplied source.
+        Pass::Multiply => (
             "blend_mul",
             "COLOR = vec4(rgb * opacity + (1.0 - c.a * opacity), 1.0);",
         ),
-        // Additive: the destination plus the (premultiplied) source.
-        BlendKind::Add => ("blend_add", "COLOR = vec4(rgb * opacity, 1.0);"),
-        // Godot has no screen blend; source-over with the colour's own
-        // brightness as coverage comes close for light-on-dark glows.
-        BlendKind::Screen => (
-            "blend_premul_alpha",
-            "vec3 s = rgb * opacity; COLOR = vec4(s, max(s.r, max(s.g, s.b)));",
-        ),
+        // The destination plus the premultiplied source.
+        Pass::Add => ("blend_add", "COLOR = vec4(rgb * opacity, 1.0);"),
+        // Screen is Cs + Cd·(1 - Cs): multiply by (1 - Cs), then add Cs.
+        Pass::ScreenDarken => ("blend_mul", "COLOR = vec4(1.0 - rgb * opacity, 1.0);"),
+        Pass::ScreenLighten => ("blend_add", "COLOR = vec4(rgb * opacity, 1.0);"),
     };
     format!(
         "shader_type canvas_item;
@@ -60,13 +83,26 @@ void fragment() {{
     )
 }
 
-/// One part's canvas item and its geometry in Godot's types.
-struct PartItem {
+/// A canvas item drawing one pass of a part.
+struct PassItem {
     item: Rid,
     material: Gd<ShaderMaterial>,
+}
+
+/// One part's canvas items and its geometry in Godot's types.
+struct PartItem {
+    first: PassItem,
+    /// Screen's second pass.
+    second: Option<PassItem>,
     indices: PackedInt32Array,
     uvs: PackedVector2Array,
     texture: usize,
+}
+
+impl PartItem {
+    fn passes(&self) -> impl Iterator<Item = &PassItem> {
+        std::iter::once(&self.first).chain(self.second.as_ref())
+    }
 }
 
 /// Plays an Aether Canvas model.
@@ -87,8 +123,10 @@ pub struct AetherModel2D {
     playing: bool,
     player: Option<Player>,
     textures: Vec<Gd<ImageTexture>>,
-    shaders: Vec<(BlendKind, Gd<Shader>)>,
+    shaders: Vec<(Pass, Gd<Shader>)>,
     items: Vec<PartItem>,
+    /// Clip groups' mask items, reused from frame to frame.
+    masks: Vec<Rid>,
     base: Base<Node2D>,
 }
 
@@ -104,6 +142,7 @@ impl INode2D for AetherModel2D {
             textures: Vec::new(),
             shaders: Vec::new(),
             items: Vec::new(),
+            masks: Vec::new(),
             base,
         }
     }
@@ -206,16 +245,19 @@ impl AetherModel2D {
         let parent = self.base().get_canvas_item();
         let mut items = Vec::new();
         for part in &player.model().parts {
-            let shader = self.shader(part.blend);
-            let mut material = ShaderMaterial::new_gd();
-            material.set_shader(&shader);
-            let item = server.canvas_item_create();
-            server.canvas_item_set_parent(item, parent);
-            server.canvas_item_set_material(item, material.get_rid());
-            server.canvas_item_set_default_texture_filter(item, CanvasItemTextureFilter::LINEAR);
+            let (first, second) = Pass::for_blend(part.blend);
+            let mut pass_item = |pass| {
+                let mut material = ShaderMaterial::new_gd();
+                material.set_shader(&self.shader(pass));
+                let item = server.canvas_item_create();
+                server.canvas_item_set_parent(item, parent);
+                server.canvas_item_set_material(item, material.get_rid());
+                server.canvas_item_set_default_texture_filter(item, CanvasItemTextureFilter::LINEAR);
+                PassItem { item, material }
+            };
             items.push(PartItem {
-                item,
-                material,
+                first: pass_item(first),
+                second: second.map(&mut pass_item),
                 indices: part.triangles.iter().flatten().map(|&i| i as i32).collect(),
                 uvs: part.uvs.iter().map(|uv| Vector2::new(uv.x, uv.y)).collect(),
                 texture: part.texture as usize,
@@ -437,14 +479,14 @@ impl AetherModel2D {
         self.redraw();
     }
 
-    /// A shader for a blend mode, shared by every part using it.
-    fn shader(&mut self, blend: BlendKind) -> Gd<Shader> {
-        if let Some((_, shader)) = self.shaders.iter().find(|(b, _)| *b == blend) {
+    /// The shader for a pass, shared by every part using it.
+    fn shader(&mut self, pass: Pass) -> Gd<Shader> {
+        if let Some((_, shader)) = self.shaders.iter().find(|(p, _)| *p == pass) {
             return shader.clone();
         }
         let mut shader = Shader::new_gd();
-        shader.set_code(&shader_code(blend));
-        self.shaders.push((blend, shader.clone()));
+        shader.set_code(&shader_code(pass));
+        self.shaders.push((pass, shader.clone()));
         shader
     }
 
@@ -456,73 +498,113 @@ impl AetherModel2D {
         let mut server = RenderingServer::singleton();
         let parent = self.base().get_canvas_item();
         let white = PackedColorArray::new();
-        let mut shown = vec![false; self.items.len()];
-        let mut clip_bases = vec![false; self.items.len()];
-        for draw in player.draw_list() {
-            if let Some(base) = draw.mask_part() {
-                clip_bases[base] = true;
-            }
-        }
-        for (order, draw) in player.draw_list().iter().enumerate() {
-            let index = draw.part as usize;
-            if draw.opacity <= 0.0 {
-                continue;
-            }
-            // Clipped parts draw inside their base's canvas group.
-            let owner = match draw.mask_part() {
-                Some(base) => self.items_rid(base).unwrap_or(parent),
-                None => parent,
-            };
-            let Some(part) = self.items.get_mut(index) else {
-                continue;
-            };
-            shown[index] = true;
-            server.canvas_item_set_parent(part.item, owner);
-            server.canvas_item_set_draw_index(part.item, order as i32);
-            let points: PackedVector2Array = player
+        let points = |index: usize| -> PackedVector2Array {
+            player
                 .positions(index)
                 .chunks_exact(2)
                 .map(|c| Vector2::new(c[0], c[1]))
-                .collect();
-            server.canvas_item_clear(part.item);
-            if let Some(texture) = self.textures.get(part.texture) {
-                server
-                    .canvas_item_add_triangle_array_ex(part.item, &part.indices, &points, &white)
-                    .uvs(&part.uvs)
-                    .texture(texture.get_rid())
-                    .done();
+                .collect()
+        };
+        let mut shown = vec![false; self.items.len()];
+        let mut masks_used = 0;
+        // The clip group being filled: its base part and mask item.
+        let mut group: Option<(usize, Rid)> = None;
+        // Draw indices among the node's items and inside the clip group.
+        let (mut slot, mut inner) = (0, 0);
+        for draw in player.draw_list() {
+            let index = draw.part as usize;
+            if draw.opacity <= 0.0 || index >= self.items.len() {
+                continue;
             }
-            let material = &mut part.material;
-            material.set_shader_parameter("opacity", &draw.opacity.to_variant());
-            material.set_shader_parameter(
-                "multiply",
-                &Vector3::new(draw.multiply[0], draw.multiply[1], draw.multiply[2]).to_variant(),
-            );
-            material.set_shader_parameter(
-                "screen",
-                &Vector3::new(draw.screen[0], draw.screen[1], draw.screen[2]).to_variant(),
-            );
+            let owner = match (draw.mask_part(), group) {
+                (None, _) => {
+                    group = None;
+                    parent
+                }
+                (Some(base), Some((current, mask))) if base == current => mask,
+                (Some(base), _) => {
+                    // A clip group: the base's shape, at the base's keyed
+                    // opacity (the vertex alpha), as a CLIP_ONLY canvas
+                    // group. Godot draws the group's children into a copy
+                    // of the screen and mixes that back in by the shape's
+                    // alpha: exactly the clipped parts drawn with their
+                    // coverage times the base's.
+                    if masks_used == self.masks.len() {
+                        let mask = server.canvas_item_create();
+                        server.canvas_item_set_default_texture_filter(mask, CanvasItemTextureFilter::LINEAR);
+                        server.canvas_item_set_canvas_group_mode(mask, CanvasGroupMode::CLIP_ONLY);
+                        self.masks.push(mask);
+                    }
+                    let mask = self.masks[masks_used];
+                    masks_used += 1;
+                    server.canvas_item_set_parent(mask, parent);
+                    server.canvas_item_set_draw_index(mask, slot);
+                    slot += 1;
+                    server.canvas_item_set_visible(mask, true);
+                    server.canvas_item_clear(mask);
+                    let shape = &self.items[base];
+                    if let Some(texture) = self.textures.get(shape.texture) {
+                        let alpha =
+                            PackedColorArray::from(&[Color::from_rgba(1.0, 1.0, 1.0, draw.mask_opacity)]);
+                        server
+                            .canvas_item_add_triangle_array_ex(mask, &shape.indices, &points(base), &alpha)
+                            .uvs(&shape.uvs)
+                            .texture(texture.get_rid())
+                            .done();
+                    }
+                    group = Some((base, mask));
+                    inner = 0;
+                    mask
+                }
+            };
+            shown[index] = true;
+            let part = &mut self.items[index];
+            let points = points(index);
+            let multiply = Vector3::new(draw.multiply[0], draw.multiply[1], draw.multiply[2]).to_variant();
+            let screen = Vector3::new(draw.screen[0], draw.screen[1], draw.screen[2]).to_variant();
+            let opacity = draw.opacity.to_variant();
+            let texture = self.textures.get(part.texture).map(|t| t.get_rid());
+            for pass in [Some(&mut part.first), part.second.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                let order = if owner == parent { &mut slot } else { &mut inner };
+                server.canvas_item_set_parent(pass.item, owner);
+                server.canvas_item_set_draw_index(pass.item, *order);
+                *order += 1;
+                server.canvas_item_clear(pass.item);
+                if let Some(texture) = texture {
+                    server
+                        .canvas_item_add_triangle_array_ex(pass.item, &part.indices, &points, &white)
+                        .uvs(&part.uvs)
+                        .texture(texture)
+                        .done();
+                }
+                pass.material.set_shader_parameter("opacity", &opacity);
+                pass.material.set_shader_parameter("multiply", &multiply);
+                pass.material.set_shader_parameter("screen", &screen);
+            }
         }
         for (index, part) in self.items.iter().enumerate() {
-            server.canvas_item_set_visible(part.item, shown[index]);
-            let mode = if clip_bases[index] {
-                CanvasGroupMode::CLIP_AND_DRAW
-            } else {
-                CanvasGroupMode::DISABLED
-            };
-            server.canvas_item_set_canvas_group_mode(part.item, mode);
+            for pass in part.passes() {
+                server.canvas_item_set_visible(pass.item, shown[index]);
+            }
         }
-    }
-
-    fn items_rid(&self, index: usize) -> Option<Rid> {
-        self.items.get(index).map(|p| p.item)
+        for &mask in &self.masks[masks_used..] {
+            server.canvas_item_set_visible(mask, false);
+        }
     }
 
     /// Free every canvas item.
     fn release(&mut self) {
         let mut server = RenderingServer::singleton();
         for part in self.items.drain(..) {
-            server.free_rid(part.item);
+            for pass in part.passes() {
+                server.free_rid(pass.item);
+            }
+        }
+        for mask in self.masks.drain(..) {
+            server.free_rid(mask);
         }
         self.player = None;
     }

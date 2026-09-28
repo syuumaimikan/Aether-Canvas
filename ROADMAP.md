@@ -103,11 +103,12 @@ arrives with the FFmpeg pipeline of Phase 8.
   (`.exp3.json`), both ways
 - A wgpu renderer for players, and a GPU pose preview in the editor whenever
   it is exact
+- A Godot 4 package: the `AetherModel2D` node, tested in Godot with all three
+  renderers
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group
-(part switching) editor, and ready-made engine packages (a Unity package and
-a Godot extension over the C ABI).
+(part switching) editor, and a ready-made Unity package.
 
 ## Phase 7 — Motion graphics
 

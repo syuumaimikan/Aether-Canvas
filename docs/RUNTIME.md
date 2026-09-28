@@ -7,8 +7,9 @@ ships **one runtime, `aether-player`**, that plays it everywhere:
 | Host | How | Status |
 | --- | --- | --- |
 | Web pages | `runtime/web/aether-player.js` + `aether_player.wasm` (≈190 KB gzipped), WebGL 1 or 2 | Tested in headless Chromium against the software renderer |
+| Godot 4.2+ | `runtime/godot`: the `AetherModel2D` node (a GDExtension), scripted from GDScript | Tested in Godot 4.3: logic headless, and drawing with all three renderers (Compatibility, Forward+, Mobile) against the software renderer |
 | JavaScript without a DOM | `AetherRuntime` / `AetherModel` from the same file | Tested in Node |
-| C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes, Godot GDExtension…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
+| C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
 | Rust | The `aether-player` crate | Tested |
 | Rust engines on wgpu (Bevy and others), any Vulkan/Metal/DX12/GL/WebGPU app | `aether-player-wgpu`: `GpuPlayer::prepare` + `paint` into your render pass, or `render` into a texture | Checked against the software renderer on Mesa's Vulkan driver |
 | Servers, thumbnails, CI | `aether_player::cpu`, a software renderer | The reference the others are checked against |
@@ -232,6 +233,22 @@ player.lipSync(await navigator.mediaDevices.getUserMedia({ audio: true }));
 player.start();
 ```
 
+## Godot
+
+See [runtime/godot/README.md](../runtime/godot/README.md). Copy
+`addons/aether/` into a project, add an `AetherModel2D` node, point its
+**Model Path** at `model.json`, and script it:
+
+```gdscript
+model.play_motion("Idle", false)
+model.look_toward(Vector2(0.3, 0.1))
+model.track_face(yaw, pitch, roll, {"jawOpen": 0.4, "eyeBlinkLeft": 1.0})
+if model.hit_test(model.get_local_mouse_position()) == "Face":
+    model.set_expression("Smile")
+```
+
+![The Godot demo scene](images/godot-demo.png)
+
 ## How it is kept honest
 
 * `aether-io` exports a scene that uses every export path (a rigged mesh
@@ -245,6 +262,12 @@ player.start();
   draws each pose with WebGL 1 and WebGL 2 and compares against the software
   renderer (mean difference about 0.01 levels; the rare larger ones are single
   pixels on degenerate slivers, where GPUs snap vertices to 1/256 px).
+* In Godot 4.3, `runtime/godot/test.sh` exercises the node's API headless,
+  then draws the demo character and a fixture with every drawing path. The
+  fixture has clipping to a fading, tinted mesh, plus multiply, screen, add
+  and translucency. Each renderer (Compatibility, Forward+, Mobile) must
+  match the software renderer, and the mean difference is at most 0.13
+  levels.
 * An end-to-end test turns a PSD into a model with the real
   `aether-canvas --auto-rig --export-model` binary and plays it.
 * Face tracking is checked where it shows: on an auto-rigged face, turning,

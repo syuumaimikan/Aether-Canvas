@@ -66,18 +66,23 @@ func run() -> void:
 	check(model.load("res://model/model.json"), "and a good one loads again")
 
 	if DisplayServer.get_name() != "headless" and "--render" in OS.get_cmdline_user_args():
-		await render_checks(model)
+		root.size = Vector2i(512, 640)
+		model.position = Vector2.ZERO
+		# The demo character, then a scene with every drawing path: a part
+		# clipped to a fading, tinted mesh, and multiply, screen and add parts.
+		await render_checks(model, "res://test/reference/")
+		check(model.load("res://test/fixture/model/model.json"), "the drawing fixture loads")
+		await render_checks(model, "res://test/fixture/reference/")
 
 	print("%d failed" % failures)
 	quit(1 if failures > 0 else 0)
 
 
-## Draw each reference pose and compare with the software player's render.
-func render_checks(model: AetherModel2D) -> void:
-	var poses = JSON.parse_string(FileAccess.get_file_as_string("res://test/reference/poses.json"))
-	check(poses is Array and poses.size() > 0, "reference poses are present")
-	root.size = Vector2i(512, 640)
-	model.position = Vector2.ZERO
+## Draw each reference pose in `dir` and compare with the software
+## player's render.
+func render_checks(model: AetherModel2D, dir: String) -> void:
+	var poses = JSON.parse_string(FileAccess.get_file_as_string(dir + "poses.json"))
+	check(poses is Array and poses.size() > 0, "reference poses are present in " + dir)
 	for pose in poses:
 		model.reset_pose()
 		for name in pose["values"]:
@@ -88,7 +93,10 @@ func render_checks(model: AetherModel2D) -> void:
 		await RenderingServer.frame_post_draw
 		var shot := root.get_texture().get_image()
 		shot.convert(Image.FORMAT_RGBA8)
-		var reference := Image.load_from_file(ProjectSettings.globalize_path("res://test/reference/" + pose["image"]))
+		# AETHER_GODOT_SHOTS=dir keeps Godot's frames for a closer look.
+		if OS.get_environment("AETHER_GODOT_SHOTS") != "":
+			shot.save_png(OS.get_environment("AETHER_GODOT_SHOTS").path_join(pose["image"]))
+		var reference := Image.load_from_file(ProjectSettings.globalize_path(dir + pose["image"]))
 		reference.convert(Image.FORMAT_RGBA8)
 		var total := 0.0
 		var over := 0
@@ -105,4 +113,5 @@ func render_checks(model: AetherModel2D) -> void:
 						over += 1
 		var mean := total / (reference.get_width() * reference.get_height() * 3)
 		print("  %s: mean difference %.3f, %d channels off by more than 24" % [pose["name"], mean, over])
-		check(mean < 1.0, "Godot draws '%s' like the software player" % pose["name"])
+		check(mean < 1.0 and over * 1000 < reference.get_width() * reference.get_height() * 3,
+				"Godot draws '%s' like the software player" % pose["name"])
