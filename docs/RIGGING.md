@@ -1,0 +1,321 @@
+# Rigging and animation
+
+Aether Canvas rigs painted artwork directly: the layers you paint are the
+layers that move. There is no export to a separate rigging program, no
+texture atlas to rebuild, and no re-import when you fix a stroke — repaint a
+rigged layer and the change shows through the deformation immediately.
+
+![The Rigging workspace](images/rigging-workspace.png)
+
+*The Rigging workspace: the rig hierarchy and inspector (top right), parameter
+sliders with key diamonds (bottom right), and the generated head-turn lattice
+over the character. Rendered headlessly with `examples/ui_screenshot.rs`.*
+
+## Quick start
+
+1. **Bring in artwork.** Paint it here, or open a layered **PSD** (File ›
+   Open): folders, blend modes, clipping, masks and Unicode layer names come
+   across.
+2. **Auto rig.** Switch to the *Rigging* workspace and press **✨ Auto rig**.
+   Every painted layer is meshed, and a complete rig is built from the layer
+   names (see [Auto rig](#auto-rig)). It is one undo step.
+3. **Pose it.** Drag the parameter sliders. Turn on **Physics preview** to see
+   hair swing, eyes blink and the body breathe.
+4. **Refine.** Select any object, put its parameter on a key (the slider snaps
+   to the ◊ diamonds) and shape it with the **Deform** tool (`W`).
+5. **Animate.** In the *Animation* workspace, create a motion, move the
+   playhead and drag sliders — with *Auto key* on, every slider move writes a
+   key. Press `P` to play.
+6. **Export** a GIF, a PNG sequence or a sprite sheet (Rig menu or the
+   timeline's Export section), or save the `.aether` project.
+
+![A greeting motion](images/greeting.gif)
+
+*`examples/rig_demo.rs`: a character painted, rigged, animated with a baked
+lip-sync track and exported entirely through the public API, with physics
+running.*
+
+## Concepts
+
+### Parameters
+
+A parameter is a named number with a range — `AngleX` from −30 to 30,
+`EyeLOpen` from 0 to 1. **Everything that moves is a function of
+parameters**: keyforms interpolate across them; physics, drivers, behaviours
+and motions write them. One currency for pose is what lets all those systems
+compose, and it means a motion made for one rig plays on any rig that uses the
+same parameter names. **Standard parameters** adds the conventional set
+(`AngleX/Y/Z`, `EyeLOpen`, `EyeBallX`, `BrowLY`, `MouthOpenY`, `MouthForm`,
+`BodyAngleX`, `Breath`, `HairFront`, …) that trackers and motion libraries
+expect.
+
+Parameters may be **cyclic** (a full turn wraps smoothly past the seam).
+Moving a slider is posing, not editing: it is not an undo step.
+
+### Keyforms
+
+A *keyform* is a complete shape of one object recorded at one combination of
+parameter values. Objects hold an **N‑dimensional grid** of keyforms — any
+number of parameters, each with its own keys — and the current shape is
+interpolated between the keyforms around the current values:
+
+* **Linear** — multilinear, the familiar behaviour;
+* **Smooth** — Catmull‑Rom through the keys, so a head turned through three
+  keys follows an arc and motion never "kinks" as it passes a key.
+
+Structural edits never change what you see: inserting a key fills it with the
+shape the grid already had there; binding a new parameter copies the current
+shapes along it; deleting a parameter keeps the slice at its default.
+
+To edit a keyform, every parameter the object depends on must sit on a key
+(the slider snaps within 2.5 % of a key). The parameter panel explains which
+parameter is off-key if you try to edit between keys.
+
+**Blend shapes** are additive keyforms on one parameter. They combine with
+every other key without multiplying the number of keyforms — a smile that
+works at any head angle is one blend shape instead of nine keyforms.
+
+### Meshes
+
+**Auto mesh** triangulates a layer from its alpha: the outline is dilated by a
+margin (so triangles never cut anti-aliased edges), boundary and interior
+points are placed, Delaunay-triangulated and trimmed to the shape. A coverage
+pass guarantees every painted pixel is inside the mesh. The **Mesh** tool
+(`U`) adds (click), moves (drag) and deletes (Alt‑click) vertices on the rest
+pose; **Re-mesh** at a different density **keeps every keyform, skin weight
+and jiggle weight** by interpolating them onto the new vertices.
+
+Each mesh keyform also holds **opacity**, **multiply** and **screen** tint and
+a **draw-order** offset, so parts can fade, change colour or move in front of
+their siblings under a parameter.
+
+**Glue** holds the seam between two separately meshed parts together.
+**Jiggle** turns vertices into damped springs that lag behind the rig —
+secondary motion with no keys.
+
+### Deformers
+
+* **Warp** deformers are lattices (bilinear or bicubic). Bicubic warps bend
+  curved features without creases along the lattice lines.
+* **Rotation** deformers are pivots with angle, scale and offset.
+
+Deformers nest to any depth; meshes and deformers can also follow a **bone**
+rigidly. Drags with the Deform tool are mapped back through every parent, so
+a vertex inside a turned head moves exactly where the cursor goes.
+
+### Bones and IK
+
+Bones are drawn with the **Bone** tool (`K`; start on a bone's tail to chain).
+Each bone has keyforms (rotation, translation, length), so bones are posed by
+parameters like everything else; **Add rotation parameter** makes a
+−180…180 parameter that *is* the bone's angle for direct FK animation.
+**Inverse kinematics** constraints make a chain reach for a target bone — an
+exact analytic solution for two-bone limbs, cyclic coordinate descent for
+longer chains, blended with FK by weight. Meshes are **skinned** to bones
+with linear blend skinning; **Skin to bones** computes weights automatically.
+
+### Physics
+
+Pendulum chains hang from an anchor that parameters move and tilt; the swing
+of a chosen link writes parameters back. The simulation runs at a **fixed
+120 Hz step**, so it behaves identically at any frame rate and exports match
+playback. Chains have gravity, **wind with gusts**, per-link damping,
+**stiffness toward the rest shape** (stiff bangs, loose ponytails), **angle
+limits** and **circular colliders**.
+
+### Drivers
+
+A driver computes a parameter from an expression:
+
+```text
+BodyAngleX = self + AngleX * 0.3
+Cheek      = smoothstep(0.2, 0.9, MouthOpenY) * 0.8
+AngleZ     = wiggle(0.4, 3)
+```
+
+The language has arithmetic, comparisons, `&& || !`, `? :`, parameter names
+(quote names with spaces: `"Hair Front"`), `time`, `self`, `pi`, and `sin cos
+tan asin acos atan atan2 sqrt abs floor ceil round fract sign min max clamp
+lerp mix smoothstep step pow exp ln log log10 mod remap noise wiggle pingpong
+deg rad`. It is **sandboxed**: no loops, assignments or I/O, bounded size and
+nesting, and evaluation never fails. Drivers run in dependency order; cycles
+are reported, not run.
+
+### Motions
+
+A motion is one track of keyframes per parameter. Each key's easing shapes
+the segment after it: **step, linear, cubic Bézier (with overshoot), ease
+in/out/in-out, back in/out, elastic, bounce and physically based spring**.
+The timeline shows the selected track's curve so easing is visible. The
+animator plays motions in layers (override or additive) with crossfades.
+
+**Expressions** are named parameter presets (add, multiply or overwrite)
+that fade in and out on top of motions.
+
+### Behaviours
+
+Motion that should never need keys: **auto-blink** (randomised, with double
+blinks), **breathing**, **look-at** (follow the pointer in the editor, or any
+input in a host application) and **lip sync** (live from an audio level, or
+**baked** from a WAV file into editable `MouthOpenY`/`MouthForm` keys with a
+brightness estimate separating open and spread vowels).
+
+## Generators
+
+| Generator | What it saves |
+| --- | --- |
+| **Auto rig** | A whole rig from layer names (below) |
+| **3D head turn** | The 3×3 keyforms of a face warp, from an ellipsoid turned in 3D: the middle of the face travels further than the silhouette, the far side compresses — parallax, fold-free up to ~40° |
+| **Sway** | A pendulum bend keyed on any parameter (hair, ribbons, tails), anchored at any edge |
+| **Close** | A collapse onto a line at the parameter's minimum (eyelids, mouths) |
+| **Mirror key** | The opposite key's shape, mirrored, matched vertex-by-vertex even on asymmetric meshes |
+| **Standard physics & behaviours** | Hair chains for `HairFront/Side/Back`, blink, breath and look-at on the standard parameters |
+| **Skin to bones** | Automatic bone weights |
+| **Bone rotation control** | A parameter that is a bone's angle |
+
+## Auto rig
+
+**✨ Auto rig** reads layer names (and the folders around them) in English or
+Japanese and builds:
+
+* a **Body** warp inside a **Body tilt** pivot, a **Neck** pivot and a
+  **Head** warp, with parts sorted into them;
+* a generated **head turn** (`AngleX/AngleY`) and body turn (`BodyAngleX`),
+  head tilt (`AngleZ`) and body tilt (`BodyAngleZ`);
+* **eyes** that close (`EyeLOpen/EyeROpen`: whites and irises squash, lashes
+  drop to a closed line) and **irises** that look (`EyeBallX/Y`);
+* **brows** (`BrowLY/BrowRY`), a **mouth** that opens and smiles
+  (`MouthOpenY`, `MouthForm`), **blush** that fades in (`Cheek`);
+* **hair and accessories** that sway (`HairFront/Side/Back`) with physics;
+* **breathing**, **auto-blink**, **look-at**, a body-follows-head **driver**
+  and an **Idle** motion.
+
+| Role | Recognised names (case-insensitive, any language mix) |
+| --- | --- |
+| Face | face, head, skin · 顔, 肌, 輪郭, 頭 |
+| Eye white | eye white, sclera · 白目 |
+| Iris | iris, pupil, eye highlight · 瞳, 黒目, 虹彩 |
+| Lash / lid | lash, eyelid, lid · まつ毛, 睫毛, まぶた, アイライン |
+| Brow | brow · 眉, まゆ |
+| Mouth | mouth, lip · 口, 唇 |
+| Mouth inside | mouth open / inside / tongue / teeth · 口 開き, 舌, 歯 |
+| Cheek | cheek, blush · 頬, チーク, 赤面 |
+| Bangs | bangs, fringe, front hair · 前髪 |
+| Side hair | side hair, sidelock · 横髪, サイド, もみあげ |
+| Back hair | back hair, ponytail, twintail · 後ろ髪, ポニー, ツイン |
+| Other hair | hair, ahoge · 髪, アホ毛 |
+| Accessory | ribbon, earring, tail, tie · リボン, イヤリング, ピアス, しっぽ, ネクタイ |
+| Body | body, torso, clothes, shirt, dress · 体, 胴, 服, シャツ, 制服 |
+
+Left and right come from the name (`L`, `left`, `左` …) or, failing that,
+from the part's position. Unrecognised layers are listed in the status bar
+and ride along with their folder.
+
+![Auto-rigged poses](images/auto-rig-poses.png)
+
+*The demo character rigged by Auto rig from its layer names alone: rest, head
+turned with the eyes looking, blink with a smile, head tilt while talking with
+blush and raised brows.*
+
+## Animation
+
+![The Animation workspace in Japanese](images/animation-workspace-ja.png)
+
+*The Animation workspace (Japanese UI): the timeline with keyframe rows, the
+selected key's easing, the eased curve under the tracks, and the character
+posed from the motion at the playhead.*
+
+* **Animate** mode: the selected motion drives the pose from the playhead,
+  and slider moves write keys (with *Auto key*). Rig mode (Animate off): the
+  sliders pose the rig for keyform editing.
+* Click the ruler to move the playhead, click a diamond to select it, drag it
+  to retime, double-click a row to key that parameter. `,` / `.` step frames;
+  `P` plays; `Shift+K` keys every parameter.
+* **Lip sync**: *Load WAV…* then *Bake lip sync* writes mouth tracks into the
+  motion (and lengthens it to fit the audio).
+* **Export**: GIF (flattened over the document background), PNG sequence, or
+  a sprite sheet with a JSON atlas; physics can run during export after a
+  warm-up so chains start settled.
+
+## Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| `U` | Mesh tool |
+| `W` | Deform tool |
+| `K` | Bone tool |
+| `P` | Play / pause |
+| `,` `.` | Previous / next frame |
+| `Shift+K` | Key all parameters |
+| `Shift+P` | Physics preview |
+| `Shift+R` | Reset pose |
+
+All shortcuts are rebindable (Help › Keyboard Shortcuts).
+
+## Using the rig from code
+
+The rig is plain data with pure evaluation, in its own crate with no GPU or
+window dependency:
+
+```rust
+use aether_document::rig::{Rig, RigRuntime};
+
+let pose = doc.rig.evaluate();          // deterministic: values in, geometry out
+let mut runtime = RigRuntime::new();     // time: motions, behaviours, physics
+runtime.play(&doc.rig, 0);
+runtime.tick(&mut doc.rig, 1.0 / 60.0);  // writes simulated values
+let frame = Compositor::new().render(&doc);
+```
+
+`examples/rig_demo.rs` builds, rigs, animates and exports a character this
+way; `examples/ui_screenshot.rs` renders the editor itself without a GPU.
+
+## Compared with Live2D Cubism
+
+Live2D Cubism is the established tool for this kind of 2D rigging, and
+Aether Canvas deliberately keeps its core model — parameters, keyforms, warp
+and rotation deformers — because it works. The table is our honest reading
+of where each stands.
+
+| | Aether Canvas | Live2D Cubism |
+| --- | --- | --- |
+| Painting and rigging | **One application**: rig the layers you paint; repaint while rigged with no re-import | Artwork prepared in an external painting tool, imported as PSD; changes need re-import |
+| Import | Layered **PSD** (folders, blend modes, clipping, masks, Unicode names) and images; PSD export | PSD import |
+| Getting started | **✨ Auto rig from layer names** (EN/JA): full rig with physics, behaviours and an idle motion in one step | Templates and assisted face-motion generation for some parts |
+| Meshes | Automatic from alpha with a **coverage guarantee**; **re-meshing keeps keyforms**, skin and jiggle weights; manual editing | Automatic and manual meshing |
+| Keyform grid | **Any number of parameters**, linear or **smooth (C1) interpolation**, cyclic parameters, additive blend shapes | Multi-parameter keyforms (linear), blend shapes |
+| Deformers | Warp (**bicubic** or bilinear) and rotation, nested; **drag mapping through deformed parents** | Warp (Bézier) and rotation, nested |
+| Head turn | **Generated 3D ellipsoid turn**, fold-free, 3×3 keys with smooth interpolation | Manual keyforms or face-motion generation |
+| Bones | **Skeleton with FK, analytic two-bone IK, CCD IK, linear blend skinning, automatic weights** | No skeletal bones or IK |
+| Per-key appearance | Opacity, multiply and screen tint, draw order | Opacity, multiply and screen tint, draw order |
+| Glue | Yes | Yes |
+| Blend modes and effects | **23 blend modes, clipping, masks, groups, adjustment layers and non-destructive effects** (blur, glow, shadow, outline…) all apply to rigged layers | A smaller set of blend modes and clipping masks |
+| Physics | Verlet chains, **fixed 120 Hz step (frame-rate independent)**, gravity, **wind with gusts**, stiffness, **angle limits, colliders** | Pendulum physics with inputs and outputs |
+| Secondary motion | **Per-vertex jiggle** springs | Via physics groups |
+| Parameter logic | **Sandboxed expression drivers** with dependency ordering | — |
+| Motions | Step, linear, Bézier, ease, back, **elastic, bounce, spring** keys; layered animator with crossfades; expressions | Linear/Bézier/stepped curves; expressions; pose groups |
+| Procedural motion | Auto-blink, breathing, **look-at**, lip sync (live or **baked from WAV** with vowel brightness) | Blink, breath and lip sync via the SDK framework; lip sync from audio |
+| Undo | **Every rig edit undoable**, slider drags coalesce, posing kept out of history | Undo in the editor |
+| Export | GIF, PNG sequence, **sprite sheet + JSON atlas**, PSD, open project | Video, GIF, image sequence, runtime model |
+| File format | **Open**: ZIP of JSON + PNG, documented, versioned | Proprietary binary runtime format |
+| Runtime | Rust library with deterministic evaluation; headless rendering | **Mature SDKs for Unity, native, web and more** |
+| Ecosystem | New | **Large**: tracking apps, tutorials, marketplaces |
+| Price | **Free and open source** (MIT / Apache-2.0) | Free tier with limits; paid Pro licence |
+
+Where Live2D still leads is maturity and reach: its runtime SDKs run in game
+engines and on the web today, and a large ecosystem of tracking software,
+tutorials and ready-made models is built around it. On the modelling side —
+the editor itself — Aether Canvas offers more: an integrated painting
+pipeline, bones and IK, expression drivers, generators and auto-rigging, a
+far richer compositing model, frame-rate-independent physics, and an open
+format.
+
+## 日本語での概要
+
+Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギング／アニメーション機能を備えています。
+
+* **PSD を開く → ✨自動リグ → スライダーで確認 → 変形ツールで調整 → タイムラインでアニメーション → GIF／PNG 連番／スプライトシート書き出し**、がすべて一つのアプリで完結します。
+* **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（3D 楕円体による自動生成）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。
+* Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
+* 保存形式は JSON と PNG の ZIP で、仕様を公開しています。
+* 一方、Unity などのゲームエンジン向けランタイム SDK や、トラッキングアプリなどのエコシステムでは Live2D が先行しています。

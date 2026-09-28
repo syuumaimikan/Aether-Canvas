@@ -38,7 +38,9 @@ aether-render   (compositor, render cache, viewport)
       |
 aether-document (layer tree, document, commands, history)
       |
- aether-raster  (pixmaps, tiles, blending, brush engine, filters)
+  aether-rig    (parameters, keyforms, deformers, bones, physics, motions)
+      |
+ aether-raster  (pixmaps, tiles, blending, brush engine, filters, meshes)
       |
   aether-core   (math, colour, blend modes, ids, errors, input)
 ```
@@ -57,6 +59,8 @@ Project
       │                transform, clipping, mask, content }
       │         └── LayerContent = Raster | Group | Adjustment | Fill | Custom
       ├── Selection
+      ├── Rig  (parameters, meshes keyed by LayerId, deformers, bones,
+      │         physics, drivers, motions, expressions, behaviours)
       ├── IdGenerator
       └── Metadata
 ```
@@ -106,6 +110,14 @@ Four cases need more than a blend:
   that way, so it is isolated automatically.
 - **Adjustment layers** — evaluated against the current backdrop and blended
   back in, which is what makes them non-destructive and maskable.
+
+**Rigged layers.** The rig is posed once per pass. A raster layer whose mesh
+is deformed is redrawn through the posed triangles (`aether_raster::mesh`) as
+the layer's *content*, so effects, masks, clipping, blend modes and
+adjustment layers above all see the deformed pixels. Keyed draw-order offsets
+reorder siblings (carrying their clipping runs). A mesh at rest draws the
+layer directly, so binding a mesh never changes a pixel until something
+moves. Plain raster layers are borrowed rather than copied for each pass.
 
 A layer's own **effect stack** runs between producing its content and blending
 it in, so a drop shadow lands behind its layer but in front of everything below
@@ -161,6 +173,31 @@ original pixels aside, rebuild the layer from them on every gesture (which is
 also what stops repeated passes from compounding resampling blur), and write a
 single undo entry when the artist confirms.
 
+## 5c. Rigging
+
+```text
+authored values ─▶ RigRuntime.tick ─────────────────────────────▶ Rig.dynamics
+   (sliders)       timeline scrub / animator → expressions →        (values +
+                   behaviours → drivers → physics → jiggle          jiggle offsets)
+                                                                        │
+Rig + values ─▶ Evaluator: skeleton FK → IK → deformer states ─▶ RigPose
+                meshes: keyforms + blend shapes → skin → parents     │
+                → dynamics → glue                                     ▼
+                                                   compositor / overlay / export
+```
+
+Evaluation is a pure function of the rig and a set of parameter values: the
+same values always give the same geometry, which is what lets the canvas,
+export and any future runtime agree. Everything time-dependent lives in
+`RigRuntime` and communicates only by producing parameter values and
+per-vertex offsets. The editor diffs consecutive poses and marks only the
+changed area dirty, so a blinking eye re-composites a few tiles.
+
+Rest geometry is stored in document space; a vertex's rest position doubles as
+its texture coordinate. Each deformer maps rest-space points, and nesting
+composes the maps; editing tools invert the chain locally (a numerical
+Jacobian) so drags land where the cursor is.
+
 ## 6. Undo
 
 Every edit is a `Command` that can apply and reverse itself, stored in two
@@ -176,6 +213,7 @@ stacks. Commands keep the minimum state that makes both directions exact:
 | `ResizeCanvas` | the pixels cropping would discard |
 | `SetLayerEffects`, `SetAdjustment` | the whole stack / the adjustment, before and after, coalescing across a drag |
 | `Transaction` | a batch that applies and reverses as one, rolling back on failure |
+| `SetRigCommand` | the rig before and after (vertex and keyform data, not pixels); parameter values and simulation output are deliberately excluded, so undo never moves the sliders |
 
 Interactive tools paint live and only build their command when the gesture
 ends; `History::push_applied` records such a command without re-running it.
@@ -197,6 +235,12 @@ migration step on load. See [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md).
 
 Saves are written to a temporary sibling and renamed into place, so a crash
 mid-save cannot destroy the previous version.
+
+## 8b. Interchange
+
+Layered PSD is read (raw and RLE channels, folders, masks, Unicode names) and
+written, because that is how artwork arrives for rigging. Animation exports
+to GIF, PNG sequences and sprite sheets with a JSON atlas.
 
 ## 9. Extensibility seams
 

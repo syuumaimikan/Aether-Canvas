@@ -12,6 +12,7 @@ project.aether
 ├── layers/<id>.png   one RGBA PNG per raster layer, in document coordinates
 ├── masks/<id>.png    one 8-bit grayscale PNG per layer mask
 ├── selection.png     the saved selection, when one is active
+├── rig.json          rigging and animation, when the document has any
 └── thumbnail.png     a 512px preview for file browsers
 ```
 
@@ -78,6 +79,50 @@ empty stack.
 `Custom` is how plugin content survives a round trip through a build that does
 not have the plugin: the tag and payload are stored and restored verbatim, and
 the layer is simply not drawn.
+
+## Rig
+
+When a document is rigged, the manifest's `document.rig` holds the archive
+path `"rig.json"` (older files omit the field). `rig.json` is the serialised
+rig:
+
+```json
+{
+  "parameters": [{ "id": 12, "name": "AngleX", "min": -30.0, "max": 30.0,
+                   "default": 0.0, "group": "Face", "cyclic": false }],
+  "values": { "12": 18.0 },
+  "deformers": [{ "id": 40, "name": "Head", "parent": { "Deformer": 41 },
+                  "kind": { "Warp": { "rect": { "min": {"x": 90, "y": 80},
+                                                "max": {"x": 420, "y": 520} },
+                                      "cols": 8, "rows": 8, "smooth": true,
+                                      "keyforms": { "axes": [...], "forms": [...],
+                                                    "interpolation": "Smooth" },
+                                      "blend_shapes": [] } } }],
+  "bones": [],
+  "meshes": [{ "layer": 3, "name": "Face", "parent": { "Deformer": 40 },
+               "vertices": [x0, y0, x1, y1, ...],
+               "triangles": [[0, 1, 2], ...],
+               "keyforms": { "axes": [], "forms": [{ "offsets": [0.0, 0.0, ...],
+                             "opacity": 1.0, "multiply": [1, 1, 1],
+                             "screen": [0, 0, 0], "draw_order": 0.0 }] },
+               "blend_shapes": [], "skin": null, "jiggle": null, "glue": [] }],
+  "physics": [...], "drivers": [...], "motions": [...],
+  "expressions": [...], "behaviours": {...}
+}
+```
+
+* Point lists (`vertices`, `offsets`) are flat `[x0, y0, x1, y1, …]` arrays
+  in document pixels; readers also accept `{"x":…,"y":…}` objects.
+* A keyform grid's `forms` has one entry per combination of keys, with axis 0
+  varying fastest.
+* Mesh vertices are rest positions *and* texture coordinates into the layer's
+  PNG.
+* `values` is the pose the file was saved in; parameters at their default are
+  omitted.
+
+A damaged `rig.json` is reported as an error rather than silently dropped, so
+saving over the file cannot destroy rigging work. The full schema is the
+serde form of `aether_rig::Rig`.
 
 ## Versioning
 
