@@ -475,6 +475,7 @@ impl AetherApp {
         let state = &mut self.state;
         for (key, kind) in [
             ("timeline.export_gif", crate::rigging::ExportKind::Gif),
+            ("timeline.export_apng", crate::rigging::ExportKind::Apng),
             ("timeline.export_png", crate::rigging::ExportKind::PngSequence),
             ("timeline.export_sheet", crate::rigging::ExportKind::SpriteSheet),
         ] {

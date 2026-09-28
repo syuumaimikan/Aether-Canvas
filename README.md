@@ -70,7 +70,8 @@ project, one document model and one timeline.
   layered motions with crossfades, expressions, auto-blink, breathing,
   look-at and lip sync baked from WAV
 - Rigged layers keep every blend mode, mask, clipping group and effect
-- Export GIF, PNG sequences and sprite sheets; import and export layered PSD
+- Export GIF, APNG (full colour, soft transparency), PNG sequences and
+  sprite sheets; import and export layered PSD
 - Import and export Live2D motions (`.motion3.json`) and expressions
   (`.exp3.json`): bring them along, or animate existing Live2D models with
   Aether's timeline

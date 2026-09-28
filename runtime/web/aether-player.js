@@ -830,6 +830,49 @@ export class AetherPlayer {
     });
   }
 
+  /**
+   * Record what the canvas shows as a video (WebM where the browser can; a
+   * transparent background stays transparent). Returns `{ stop, mimeType }`;
+   * `stop()` resolves to the video as a Blob.
+   */
+  record({ fps = 60, mimeType, bitsPerSecond = 8_000_000 } = {}) {
+    const type =
+      mimeType ??
+      ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find((t) =>
+        MediaRecorder.isTypeSupported(t),
+      );
+    if (!type) throw new Error('this browser cannot record video');
+    const stream = this.canvas.captureStream(fps);
+    const recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: bitsPerSecond });
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size) chunks.push(e.data);
+    };
+    const done = new Promise((resolve, reject) => {
+      recorder.onstop = () => resolve(new Blob(chunks, { type: type.split(';')[0] }));
+      recorder.onerror = (e) => reject(e.error ?? new Error('recording failed'));
+    });
+    recorder.start(250);
+    let stopping = null;
+    const stop = () => {
+      if (!stopping) {
+        stopping = done;
+        recorder.stop();
+        stream.getTracks().forEach((t) => t.stop());
+      }
+      return stopping;
+    };
+    // Disposing the player stops a recording; stopping it first deregisters.
+    const release = this.cleanup(stop);
+    return {
+      stop: () => {
+        release();
+        return stop();
+      },
+      mimeType: type,
+    };
+  }
+
   /** Stop, release the model and GPU resources, and remove listeners. */
   dispose() {
     this.stop();

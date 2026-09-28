@@ -189,6 +189,48 @@ pub fn export_gif(frames: &[Pixmap], path: impl AsRef<Path>, fps: f32, backgroun
     Ok(())
 }
 
+/// Encode frames as a looping animated PNG. Unlike GIF, APNG keeps full
+/// colour and soft transparency, and every browser plays it.
+pub fn encode_apng(frames: &[Pixmap], fps: f32) -> Result<Vec<u8>> {
+    let Some(first) = frames.first() else {
+        return Err(AetherError::invalid("there are no frames to export"));
+    };
+    let (width, height) = (first.width(), first.height());
+    if frames.iter().any(|f| f.width() != width || f.height() != height) {
+        return Err(AetherError::invalid("frames differ in size"));
+    }
+    let failed =
+        |e: png::EncodingError| AetherError::UnsupportedFormat(format!("could not encode APNG: {e}"));
+    let delay_ms = (1000.0 / fps.clamp(1.0, 240.0)).round().clamp(1.0, 65535.0) as u16;
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        // Zero plays means loop forever.
+        encoder.set_animated(frames.len() as u32, 0).map_err(failed)?;
+        encoder.set_frame_delay(delay_ms, 1000).map_err(failed)?;
+        // Each frame replaces the last outright, transparent pixels included.
+        encoder
+            .set_dispose_op(png::DisposeOp::Background)
+            .map_err(failed)?;
+        encoder.set_blend_op(png::BlendOp::Source).map_err(failed)?;
+        let mut writer = encoder.write_header().map_err(failed)?;
+        for frame in frames {
+            writer.write_image_data(frame.data()).map_err(failed)?;
+        }
+        writer.finish().map_err(failed)?;
+    }
+    Ok(bytes)
+}
+
+/// Write an animated PNG.
+pub fn export_apng(frames: &[Pixmap], path: impl AsRef<Path>, fps: f32) -> Result<()> {
+    let bytes = encode_apng(frames, fps)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
 /// One frame's place in a sprite sheet.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SheetFrame {
@@ -370,5 +412,33 @@ mod tests {
         let json = export_sprite_sheet(&frames, dir.path().join("walk.png"), 12.0).expect("sheet");
         let text = std::fs::read_to_string(json).expect("json");
         assert!(text.contains("\"fps\": 12.0"));
+    }
+
+    #[test]
+    fn apng_keeps_every_frame_colour_and_transparency_exactly() {
+        use image::AnimationDecoder;
+        let mut frames = Vec::new();
+        for i in 0..3u8 {
+            let mut frame = Pixmap::new(6, 4);
+            frame.set(i as i32, 1, Rgba8::new(10 + i, 200, 30, 255));
+            frame.set(5, 3, Rgba8::new(250, 120, 60, 77)); // soft alpha, which GIF cannot keep
+            frames.push(frame);
+        }
+        let bytes = encode_apng(&frames, 12.0).expect("encode");
+        let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&bytes)).expect("png");
+        let decoded: Vec<_> = decoder
+            .apng()
+            .expect("animated")
+            .into_frames()
+            .collect_frames()
+            .expect("frames");
+        assert_eq!(decoded.len(), 3);
+        for (frame, back) in frames.iter().zip(&decoded) {
+            assert_eq!(back.buffer().as_raw().as_slice(), frame.data());
+            let (num, den) = back.delay().numer_denom_ms();
+            assert!((num as f32 / den as f32 - 1000.0 / 12.0).abs() < 1.0);
+        }
+        assert!(encode_apng(&[], 12.0).is_err());
+        assert!(encode_apng(&[Pixmap::new(2, 2), Pixmap::new(3, 2)], 12.0).is_err());
     }
 }

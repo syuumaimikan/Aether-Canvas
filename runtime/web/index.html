@@ -70,6 +70,9 @@
     <h2>Motions</h2>
     <div class="buttons" id="motions"></div>
 
+    <h2>Recording</h2>
+    <div class="buttons"><button id="record">● Record video</button></div>
+
     <h2>Expressions</h2>
     <div class="buttons" id="expressions"></div>
 
@@ -158,6 +161,32 @@
     }
   });
   document.getElementById('calibrate').addEventListener('click', () => tracking?.calibrate());
+
+  let recording = null;
+  document.getElementById('record').addEventListener('click', async (e) => {
+    if (!player) return;
+    if (!recording) {
+      try {
+        recording = player.record();
+        e.target.classList.add('on');
+        e.target.textContent = '■ Stop and save';
+      } catch (error) {
+        status.textContent = `recording: ${error.message}`;
+      }
+      return;
+    }
+    const video = await recording.stop();
+    recording = null;
+    e.target.classList.remove('on');
+    e.target.textContent = '● Record video';
+    const link = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(video),
+      download: `aether-recording.${video.type.includes('mp4') ? 'mp4' : 'webm'}`,
+    });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    status.textContent = `saved a ${(video.size / 1024).toFixed(0)} KB video`;
+  });
 
   function setUp(p) {
     stopTracking();

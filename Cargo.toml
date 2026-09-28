@@ -38,6 +38,7 @@ thiserror = "2.0"
 rayon = "1.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tiff", "bmp", "gif"] }
 zip = { version = "8.0", default-features = false, features = ["deflate"] }
+png = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eframe = { version = "0.35", default-features = false, features = ["wgpu", "default_fonts", "persistence", "x11", "wayland"] }

@@ -70,7 +70,8 @@ implemented.
 - Layered animator with override/additive layers and crossfades; expressions
 - Auto-blink, breathing, look-at and lip sync (live, or baked from WAV)
 - Sandboxed expression drivers
-- Export as GIF, PNG sequence and sprite sheet + JSON atlas, with physics
+- Export as GIF, APNG, PNG sequence and sprite sheet + JSON atlas, with
+  physics; the web player records WebM video
 
 Carried forward: onion skinning and frame-by-frame (raster) animation, which
 arrive with the pixel-art frame model of Phase 3; a draggable Bézier-handle

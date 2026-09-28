@@ -321,7 +321,7 @@ of where each stands.
 | Motions | Step, linear, Bézier, ease, back, **elastic, bounce, spring** keys; layered animator with crossfades; expressions | Linear/Bézier/stepped curves; expressions; pose groups |
 | Procedural motion | Auto-blink, breathing, **look-at**, lip sync (live or **baked from WAV** with vowel brightness) | Blink, breath and lip sync via the SDK framework; lip sync from audio |
 | Undo | **Every rig edit undoable**, slider drags coalesce, posing kept out of history | Undo in the editor |
-| Export | GIF, PNG sequence, **sprite sheet + JSON atlas**, PSD, runtime model, open project | Video, GIF, image sequence, runtime model |
+| Export | GIF, **APNG (full colour, soft transparency)**, PNG sequence, **sprite sheet + JSON atlas**, PSD, runtime model, open project; **video (WebM, transparent) recorded straight from the web player** | Video, GIF, image sequence, runtime model |
 | Pipeline | **PSD → rigged, playable model in one command** (`--auto-rig --export-model`), no window needed | Exported from the editor |
 | File format | **Open**: project and runtime model are documented JSON + PNG | Proprietary binary runtime format |
 | Runtime | **One open-source runtime running the editor's own rig code**: WebAssembly + WebGL 1/2 for the web (≈190 KB gzipped, ~0.8 ms per frame for the demo character), a C ABI for native hosts, a Rust crate, a software renderer. Every rig feature above plays back (bones and IK, drivers, jiggle, glue, physics, motions, behaviours), parity-tested against the editor; effects and masks are baked into textures and blend modes map to normal, multiply, screen and add | **Mature official SDKs** for Unity, native C++, web and Java |
@@ -345,7 +345,7 @@ authored.
 
 Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギング／アニメーション機能を備えています。
 
-* **PSD を開く → ✨自動リグ → スライダーで確認 → 変形ツールで調整 → タイムラインでアニメーション → GIF／PNG 連番／スプライトシート書き出し**、がすべて一つのアプリで完結します。
+* **PSD を開く → ✨自動リグ → スライダーで確認 → 変形ツールで調整 → タイムラインでアニメーション → GIF／APNG（フルカラー・半透明対応）／PNG 連番／スプライトシート書き出し**、がすべて一つのアプリで完結します。Web プレイヤーからは透過対応の WebM 動画も録画できます。
 * **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（3D 楕円体による自動生成）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。
 * Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。

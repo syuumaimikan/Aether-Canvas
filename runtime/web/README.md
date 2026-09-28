@@ -47,6 +47,11 @@ Copy `aether-player.js` and `aether_player.wasm` next to each other, then:
   player.setExpression('Smile');
   // …or lip sync from a microphone or an <audio> element.
   player.lipSync(await navigator.mediaDevices.getUserMedia({ audio: true }));
+
+  // Record a clip (WebM; a transparent background stays transparent).
+  const recording = player.record();
+  // …later
+  const video = await recording.stop();   // a Blob to download or upload
 </script>
 ```
 
@@ -107,8 +112,8 @@ node --test runtime/web/test/*.test.mjs
   events, hit testing and bad input.
 * `render.test.mjs` renders every reference pose with WebGL in headless
   Chromium and compares it with the software renderer, then drives the demo
-  page (pointer following, taps). It needs Playwright and is skipped without
-  it.
+  page (pointer following, taps) and records a clip, checking that it plays
+  back at the canvas's size. It needs Playwright and is skipped without it.
 * `tracking.test.mjs` checks head angles from face-mesh landmarks and face
   samples through the module; after `test/fetch-tracking-assets.sh` (MediaPipe
   and a public-domain photo of a face) it also has MediaPipe track that face,

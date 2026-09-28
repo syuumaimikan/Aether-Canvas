@@ -17,6 +17,7 @@ aether-player.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+png.workspace = true
 zip.workspace = true
 
 [dev-dependencies]

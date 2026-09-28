@@ -186,6 +186,11 @@ export class AetherPlayer {
   followPointer(options?: { element?: EventTarget; center?: [number, number]; reach?: number }): () => void;
   /** Emit 'hit' for taps on parts. Returns a function that stops. */
   enableHitTest(): () => void;
+  /** Record the canvas as video (WebM where supported); `stop()` resolves to the file. */
+  record(options?: { fps?: number; mimeType?: string; bitsPerSecond?: number }): {
+    stop(): Promise<Blob>;
+    mimeType: string;
+  };
   /** Lip sync from an <audio>/<video> element or a MediaStream. Returns a function that stops. */
   lipSync(source: HTMLMediaElement | MediaStream, options?: { gain?: number }): () => void;
   dispose(): void;

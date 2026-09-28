@@ -268,7 +268,7 @@ mid-save cannot destroy the previous version.
 
 Layered PSD is read (raw and RLE channels, folders, masks, Unicode names) and
 written, because that is how artwork arrives for rigging. Animation exports
-to GIF, PNG sequences and sprite sheets with a JSON atlas, and rigged
+to GIF, APNG, PNG sequences and sprite sheets with a JSON atlas, and rigged
 characters export as runtime models (section 5d). Live2D motions and
 expressions are read and written, translating curves exactly where both
 formats have the shape and fitting Bézier runs where only Aether does.

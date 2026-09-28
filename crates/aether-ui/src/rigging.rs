@@ -102,6 +102,8 @@ impl Default for GeneratorSettings {
 pub enum ExportKind {
     /// Animated GIF.
     Gif,
+    /// Animated PNG: full colour and soft transparency.
+    Apng,
     /// Numbered PNG files.
     PngSequence,
     /// One PNG grid plus a JSON atlas.
@@ -1160,6 +1162,7 @@ impl EditorState {
         };
         match kind {
             ExportKind::Gif => animation::export_gif(&frames, path, settings.fps, background)?,
+            ExportKind::Apng => animation::export_apng(&frames, path, settings.fps)?,
             ExportKind::PngSequence => {
                 let stem = path
                     .file_stem()
@@ -1180,6 +1183,7 @@ impl EditorState {
     pub fn export_animation_via_dialog(&mut self, kind: ExportKind) {
         let (label, ext) = match kind {
             ExportKind::Gif => ("GIF", "gif"),
+            ExportKind::Apng => ("Animated PNG", "png"),
             ExportKind::PngSequence | ExportKind::SpriteSheet => ("PNG", "png"),
         };
         let picked = rfd::FileDialog::new()
@@ -1627,6 +1631,11 @@ mod tests {
             .export_animation(ExportKind::Gif, dir.path().join("loop.gif"))
             .expect("gif");
         assert!(dir.path().join("loop.gif").exists());
+        state
+            .export_animation(ExportKind::Apng, dir.path().join("loop.png"))
+            .expect("apng");
+        let apng = std::fs::read(dir.path().join("loop.png")).expect("read");
+        assert!(apng.windows(4).any(|w| w == b"acTL"), "an animated PNG");
         state
             .export_animation(ExportKind::SpriteSheet, dir.path().join("sheet.png"))
             .expect("sheet");

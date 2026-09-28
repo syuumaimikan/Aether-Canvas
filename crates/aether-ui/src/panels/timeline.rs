@@ -576,6 +576,13 @@ fn extras(ui: &mut Ui, state: &mut EditorState) {
                 if ui.button(lang.tr("timeline.export_gif")).clicked() {
                     state.export_animation_via_dialog(ExportKind::Gif);
                 }
+                if ui
+                    .button(lang.tr("timeline.export_apng"))
+                    .on_hover_text(lang.tr("timeline.export_apng_hint"))
+                    .clicked()
+                {
+                    state.export_animation_via_dialog(ExportKind::Apng);
+                }
                 if ui.button(lang.tr("timeline.export_png")).clicked() {
                     state.export_animation_via_dialog(ExportKind::PngSequence);
                 }
