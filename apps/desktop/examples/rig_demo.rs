@@ -11,7 +11,9 @@
 //! 5. add pendulum physics for the hair, drivers, auto-blink and breathing;
 //! 6. key a greeting motion and bake lip sync from a (synthesised) WAV;
 //! 7. render frames with physics running and export a GIF, a PNG contact
-//!    sheet and the `.aether` project.
+//!    sheet and the `.aether` project;
+//! 8. export the runtime model for games and the web player, with reference
+//!    renders from the software player.
 //!
 //! Run with:
 //!
@@ -30,6 +32,8 @@ use aether_document::rig::motion::Easing;
 use aether_document::rig::{ArtMesh, Behaviours, Driver, Motion, NodeRef, RigNode};
 use aether_document::Document;
 use aether_io::animation::{self, AnimationSettings};
+use aether_io::runtime_model;
+use aether_player::{cpu, Player};
 use aether_raster::Pixmap;
 use aether_render::Compositor;
 use std::path::PathBuf;
@@ -75,7 +79,7 @@ fn main() -> aether_core::Result<()> {
     // The same artwork rigged automatically, from nothing but its layer
     // names, and played with its generated Idle motion plus physics.
     let (mut auto, _) = paint_character();
-    let report = auto_rig_document(&mut auto)?;
+    let report = aether_document::rigging::auto_rig_document(&mut auto, 1.2)?;
     println!(
         "auto rig: {} parts, {} deformers, {} physics chains, unrecognised {:?}",
         report.roles.iter().map(|(_, n)| n).sum::<usize>(),
@@ -127,7 +131,7 @@ fn main() -> aether_core::Result<()> {
     println!("wrote the auto-rigged variant");
 
     // Full-size stills of a few distinct poses.
-    for (name, values) in [
+    let poses = [
         ("rest", vec![]),
         (
             "turn-right",
@@ -147,11 +151,12 @@ fn main() -> aether_core::Result<()> {
                 ("BrowRY", 1.0),
             ],
         ),
-    ] {
+    ];
+    for (name, values) in &poses {
         let mut posed = doc.clone();
         for (param, value) in values {
             if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
-                posed.rig.set_value(id, value);
+                posed.rig.set_value(id, *value);
             }
         }
         let still = animation::flatten(&compositor.render(&posed), background);
@@ -159,6 +164,76 @@ fn main() -> aether_core::Result<()> {
         aether_io::save_png(&still, &path)?;
         println!("wrote {}", path.display());
     }
+
+    export_runtime_model(&doc, &compositor, &out, &poses)
+}
+
+/// Export the runtime model for games and the web player, and render the
+/// same poses with the software player as references for GPU renderers.
+fn export_runtime_model(
+    doc: &Document,
+    compositor: &Compositor,
+    out: &std::path::Path,
+    poses: &[(&str, Vec<(&str, f32)>)],
+) -> aether_core::Result<()> {
+    let model_dir = out.join("model");
+    let export = runtime_model::export_model_to_dir(doc, &model_dir, &Default::default())?;
+    for warning in &export.warnings {
+        println!("model export: {warning}");
+    }
+    println!(
+        "wrote {} ({} parts, {} texture pages)",
+        model_dir.display(),
+        export.model.parts.len(),
+        export.textures.len()
+    );
+
+    let reference_dir = out.join("model-reference");
+    std::fs::create_dir_all(&reference_dir)?;
+    let mut player = Player::new(export.model.clone()).map_err(aether_core::AetherError::rig)?;
+    let mut listing = Vec::new();
+    for (name, values) in poses {
+        player.reset();
+        let mut posed = doc.clone();
+        for (param, value) in values {
+            if let Some(index) = player.parameter_index(param) {
+                player.set_parameter(index, *value);
+            }
+            if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
+                posed.rig.set_value(id, *value);
+            }
+        }
+        player.update();
+        let runtime = cpu::render(&player, &export.textures);
+        let editor = compositor.render_with(
+            &posed,
+            &aether_render::RenderOptions {
+                include_background: false,
+                ..Default::default()
+            },
+        );
+        let worst = runtime
+            .data()
+            .iter()
+            .zip(editor.data())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        println!("player vs editor, {name}: largest channel difference {worst}");
+        let file = format!("{name}.png");
+        aether_io::save_png(&runtime, reference_dir.join(&file))?;
+        listing.push(serde_json::json!({
+            "name": name,
+            "image": file,
+            "values": values.iter().map(|(k, v)| (k.to_string(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>(),
+            "positions": (0..export.model.parts.len()).map(|i| player.positions(i).to_vec()).collect::<Vec<_>>(),
+        }));
+    }
+    std::fs::write(
+        reference_dir.join("poses.json"),
+        serde_json::to_string(&listing).expect("reference poses serialise"),
+    )?;
+    println!("wrote {}", reference_dir.display());
     Ok(())
 }
 
@@ -672,33 +747,6 @@ fn rig_character(doc: &mut Document, l: &Layers) -> aether_core::Result<()> {
     );
     let _ = Rect::ZERO;
     Ok(())
-}
-
-/// Mesh every layer and rig the document from its layer names — what the
-/// editor's "Auto rig" button does.
-fn auto_rig_document(
-    doc: &mut Document,
-) -> aether_core::Result<aether_document::rig::autorig::AutoRigReport> {
-    use aether_document::rig::autorig::{auto_rig, PartInfo};
-    let mut parts = Vec::new();
-    for layer in doc.layers.iter() {
-        let Some(pixmap) = layer.pixmap() else { continue };
-        let Some(bounds) = aether_document::rig::automesh::opaque_bounds(pixmap, 8) else {
-            continue;
-        };
-        let Some(generated) = auto_mesh(pixmap, &AutoMeshOptions::for_bounds(bounds, 1.2)) else {
-            continue;
-        };
-        let mesh = ArtMesh::new(layer.id, generated.vertices, generated.triangles);
-        parts.push(PartInfo {
-            layer: layer.id,
-            name: layer.name.clone(),
-            groups: Vec::new(),
-            bounds: mesh.bounds(),
-        });
-        doc.rig.set_mesh(mesh);
-    }
-    auto_rig(&mut doc.rig, &doc.ids, &parts)
 }
 
 // ------------------------------------------------------------ shape painting

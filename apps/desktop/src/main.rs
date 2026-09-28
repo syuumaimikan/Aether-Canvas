@@ -6,6 +6,7 @@
 mod cli;
 
 use aether_ui::AetherApp;
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Initial window size, in logical points.
@@ -33,6 +34,14 @@ fn main() -> ExitCode {
 
     init_logging();
 
+    if let Some(dir) = &cli.export_model {
+        return export_model(cli.open.as_deref(), dir, cli.auto_rig);
+    }
+    if cli.auto_rig {
+        eprintln!("--auto-rig only applies together with --export-model");
+        return ExitCode::FAILURE;
+    }
+
     // wgpu keeps the door open to Vulkan, Metal and DX12 from one code path,
     // which is what the compositor's GPU backend will target.
     let options = eframe::NativeOptions {
@@ -58,6 +67,68 @@ fn main() -> ExitCode {
             // instead of printing a backtrace at the user.
             eprintln!("Aether Canvas could not start: {error}");
             tracing::error!("startup failed: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--export-model`: load a project, PSD or image, optionally auto-rig it,
+/// and write the runtime model — no window, for build pipelines.
+fn export_model(file: Option<&Path>, dir: &Path, auto_rig: bool) -> ExitCode {
+    let Some(file) = file else {
+        eprintln!("--export-model needs a FILE to export");
+        return ExitCode::FAILURE;
+    };
+    let run = || -> aether_core::Result<()> {
+        let extension = file
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let mut doc = match extension.as_str() {
+            "aether" => aether_io::load_project(file)?,
+            "psd" => aether_io::psd::load_psd_file(file)?,
+            _ => {
+                let pixmap = aether_io::load_image(file)?;
+                let name = file
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let mut doc = aether_document::Document::new(pixmap.width(), pixmap.height(), name);
+                if let Some(target) = doc.layers.get_mut(doc.active_layer).and_then(|l| l.pixmap_mut()) {
+                    *target = pixmap;
+                }
+                doc
+            }
+        };
+        if auto_rig {
+            let report = aether_document::rigging::auto_rig_document(&mut doc, 1.0)?;
+            let parts: usize = report.roles.iter().map(|(_, n)| n).sum();
+            println!(
+                "auto rig: {parts} parts recognised, {} deformers, {} physics chains",
+                report.deformers, report.physics
+            );
+            if !report.unrecognised.is_empty() {
+                println!("auto rig: left static: {}", report.unrecognised.join(", "));
+            }
+        }
+        let export = aether_io::runtime_model::export_model_to_dir(&doc, dir, &Default::default())?;
+        for warning in &export.warnings {
+            println!("note: {warning}");
+        }
+        println!(
+            "wrote {} ({} parts, {} parameters, {} motions, {} texture pages)",
+            dir.join(aether_io::runtime_model::MODEL_FILE).display(),
+            export.model.parts.len(),
+            export.model.rig.parameters.len(),
+            export.model.rig.motions.len(),
+            export.textures.len()
+        );
+        Ok(())
+    };
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("could not export {}: {error}", file.display());
             ExitCode::FAILURE
         }
     }

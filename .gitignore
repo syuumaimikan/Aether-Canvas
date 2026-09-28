@@ -4,3 +4,7 @@ Cargo.lock.bak
 *.aether.bak
 .DS_Store
 /out
+# Web player build outputs (runtime/web/build.sh)
+/runtime/web/aether_player.wasm
+/runtime/web/model/
+/runtime/web/test/reference/

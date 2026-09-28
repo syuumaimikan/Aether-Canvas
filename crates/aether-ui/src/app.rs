@@ -246,6 +246,14 @@ impl AetherApp {
                     }
                     ui.close();
                 }
+                if ui
+                    .button(lang.tr("menu.file.export_model"))
+                    .on_hover_text(lang.tr("menu.file.export_model_hint"))
+                    .clicked()
+                {
+                    self.state.export_runtime_model_via_dialog();
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button(lang.tr("menu.file.quit")).clicked() {
                     self.state.quit_requested = true;

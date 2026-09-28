@@ -34,11 +34,13 @@ dependencies = [
  "aether-core",
  "aether-document",
  "aether-io",
+ "aether-player",
  "aether-raster",
  "aether-render",
  "aether-ui",
  "eframe",
  "egui",
+ "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -61,6 +63,7 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "aether-document",
+ "aether-player",
  "aether-raster",
  "aether-render",
  "image",
@@ -68,6 +71,17 @@ dependencies = [
  "serde_json",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "aether-player"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-raster",
+ "aether-rig",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

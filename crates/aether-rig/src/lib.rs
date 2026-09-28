@@ -41,7 +41,7 @@ pub mod behaviour;
 pub mod deformer;
 pub mod driver;
 pub mod expr;
-pub(crate) mod flat;
+pub mod flat;
 pub mod generate;
 pub mod geom;
 pub mod keyform;

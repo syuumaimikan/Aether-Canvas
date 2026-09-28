@@ -9,8 +9,10 @@ project, one document model and one timeline.
 > groups, masks, 23 blend modes, a textured brush engine, non-destructive
 > effects, transform and liquify — plus a parameter/keyform rig with warp and
 > rotation deformers, bones and IK, physics, expression drivers, a timeline,
-> lip sync, one-click auto-rigging from layer names, PSD import/export and
-> animation export. Vector, pixel-art tooling and VFX are designed for but not
+> lip sync, one-click auto-rigging from layer names, PSD import/export,
+> animation export — and a runtime that plays rigged models on the web
+> (WebAssembly + WebGL) and natively (C ABI) exactly as the editor does.
+> Vector, pixel-art tooling and VFX are designed for but not
 > yet implemented — see [ROADMAP.md](ROADMAP.md) for exactly what exists
 > today. Nothing in this repository is a mock: if the UI offers it, it works.
 
@@ -72,6 +74,26 @@ project, one document model and one timeline.
 - An honest comparison with Live2D Cubism is in
   [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
 
+**Runtime** — see [docs/RUNTIME.md](docs/RUNTIME.md)
+- Export a runtime model (open JSON + PNG texture atlases) from File ▸
+  *Export runtime model…*, or headlessly:
+  `aether-canvas --auto-rig --export-model out/ character.psd` turns a PSD
+  into a rigged, playable model in one command
+- One runtime, `aether-player`, running the editor's own rig code: every rig
+  feature — bones and IK, drivers, jiggle, physics, motions, expressions,
+  blink, breath, look-at, lip sync, motion events, hit testing — plays back
+  identically
+- Web player: WebAssembly (≈190 KB gzipped) + WebGL 1/2, a drop-in
+  `<canvas>` component with pointer following, tap events and microphone lip
+  sync; about 0.8 ms per frame for the demo character
+- A C ABI with a header for native engines and apps, a Rust crate, and a
+  software renderer for servers and tests
+- Parity-tested: WebGL in headless Chromium and the software renderer
+  against the editor's compositor, WebAssembly against native, and a C
+  program against the header
+
+![The web player](docs/images/web-player.png)
+
 **Canvas**
 - GPU-accelerated view (wgpu) with pan, zoom, rotation, mirror and a pixel grid
 - Tile-based incremental compositing: a brush dab re-composites and re-uploads
@@ -125,9 +147,18 @@ cargo run --release -p aether-desktop --example ui_screenshot -- demo/aether-cha
 ```
 
 `rig_demo` paints a character, rigs it by hand *and* with Auto rig, animates
-it with physics and baked lip sync, and writes GIFs, stills and projects.
-`ui_screenshot` renders the editor itself to a PNG in software — no GPU or
-display needed.
+it with physics and baked lip sync, and writes GIFs, stills, projects and the
+runtime model. `ui_screenshot` renders the editor itself to a PNG in
+software — no GPU or display needed.
+
+### The web player
+
+```sh
+rustup target add wasm32-unknown-unknown
+runtime/web/build.sh --demo            # the WebAssembly module and a demo model
+node runtime/web/test/serve.mjs        # open http://localhost:8080/
+node --test runtime/web/test/*.test.mjs
+```
 
 ## Repository layout
 
@@ -141,9 +172,13 @@ crates/
   aether-document/  layer tree, document model, commands, undo history
   aether-render/    compositor, render cache, viewport maths
   aether-io/        .aether project container, image and PSD import/export,
-                    animation export
+                    animation and runtime-model export
+  aether-player/    the runtime: model format, player, C ABI (also the
+                    WebAssembly interface), software renderer
   aether-ui/        panels, tools, docking layout, application shell
 apps/desktop/       the binary, plus end-to-end tests and examples
+runtime/web/        the JavaScript/WebGL player, demo page and browser tests
+runtime/c/          a C example, compiled and run by the test suite
 docs/               architecture notes and the file-format specification
 ```
 
@@ -155,6 +190,8 @@ docs/               architecture notes and the file-format specification
 - [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md) — the `.aether` container
 - [docs/RIGGING.md](docs/RIGGING.md) — rigging and animation guide, and the
   comparison with Live2D Cubism
+- [docs/RUNTIME.md](docs/RUNTIME.md) — exporting and playing models in games,
+  apps and on the web; the model format and the C API
 
 ## Licence
 

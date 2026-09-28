@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aether Player</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --panel: #ffffff; --ink: #1f1d24; --muted: #6b6775; --line: #e2dfe8;
+    --accent: #5b3fa6; --accent-ink: #ffffff; --stage: #ebe7df;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17161b; --panel: #1f1e25; --ink: #ece9f3; --muted: #9a95a8; --line: #302e39;
+      --accent: #9d86e6; --accent-ink: #17161b; --stage: #24222b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  main { display: flex; height: 100%; }
+  #stage { flex: 1; position: relative; min-width: 0; background: var(--stage); }
+  #canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+  #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center;
+    color: var(--muted); pointer-events: none; }
+  #message[hidden] { display: none; }
+  #status { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+  aside { width: 320px; flex: none; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; }
+  p.lead { margin: 0; color: var(--muted); font-size: 13px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  button, .file { font: inherit; border: 1px solid var(--line); background: transparent; color: var(--ink);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover, .file:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .file input { display: none; }
+  label.toggle { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .param { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 8px; margin: 2px 0; }
+  .param span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .param output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  @media (max-width: 720px) {
+    main { flex-direction: column; }
+    #stage { flex: none; height: 60vh; }
+    aside { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="message">Loading…</div>
+    <div id="status"></div>
+  </div>
+  <aside>
+    <h1>Aether Player</h1>
+    <p class="lead">Rigging, physics and motions run in WebAssembly — the same code as the editor — and WebGL draws the result.</p>
+
+    <h2>Model</h2>
+    <div class="buttons">
+      <label class="file">Open model folder…<input id="folder" type="file" webkitdirectory multiple></label>
+    </div>
+
+    <h2>Motions</h2>
+    <div class="buttons" id="motions"></div>
+
+    <h2>Expressions</h2>
+    <div class="buttons" id="expressions"></div>
+
+    <h2>Behaviour</h2>
+    <label class="toggle"><input type="checkbox" id="follow" checked> Look at the pointer</label>
+    <label class="toggle"><input type="checkbox" id="physics" checked> Physics</label>
+    <label class="toggle"><input type="checkbox" id="behaviours" checked> Blink and breathe</label>
+    <div class="buttons" style="margin-top:8px"><button id="mic">Lip sync from microphone</button></div>
+
+    <h2>Parameters</h2>
+    <div id="parameters"></div>
+  </aside>
+</main>
+<script type="module">
+  import { AetherPlayer } from './aether-player.js';
+
+  const canvas = document.getElementById('canvas');
+  const message = document.getElementById('message');
+  const status = document.getElementById('status');
+  let player = null;
+  let stopFollowing = null;
+
+  function show(text) {
+    message.textContent = text;
+    message.hidden = !text;
+  }
+
+  function button(label, onClick) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function setUp(p) {
+    player?.dispose();
+    player = p;
+    stopFollowing = null;
+    show('');
+    player.enableHitTest();
+    player.on('hit', ({ part }) => (status.textContent = `touched ${part}`));
+    player.on('event', ({ name, motion }) => (status.textContent = `${motion}: ${name}`));
+
+    const motions = document.getElementById('motions');
+    motions.replaceChildren(
+      ...player.motions.map((m) => button(m.name, () => player.playMotion(m.index))),
+      button('Stop', () => player.stopMotions()),
+    );
+    if (!player.motions.length) motions.textContent = 'None';
+
+    const expressions = document.getElementById('expressions');
+    const expressionButtons = player.expressions.map((name) =>
+      button(name, (e) => {
+        const on = !e.target.classList.contains('on');
+        expressionButtons.forEach((b) => b.classList.remove('on'));
+        e.target.classList.toggle('on', on);
+        player.setExpression(on ? name : null);
+      }),
+    );
+    expressions.replaceChildren(...expressionButtons);
+    if (!expressionButtons.length) expressions.textContent = 'None';
+
+    const list = document.getElementById('parameters');
+    const rows = player.parameters.map((p) => {
+      const row = document.createElement('label');
+      row.className = 'param';
+      const name = document.createElement('span');
+      name.textContent = name.title = p.name;
+      const slider = document.createElement('input');
+      Object.assign(slider, { type: 'range', min: p.min, max: p.max, step: (p.max - p.min) / 200, value: p.default });
+      const value = document.createElement('output');
+      slider.addEventListener('input', () => player.setParameter(p.index, Number(slider.value)));
+      row.append(name, slider, value);
+      return { slider, value, index: p.index };
+    });
+    list.replaceChildren(...rows.map((r) => r.slider.parentElement));
+    // Sliders follow the drawn values (motions, physics…) unless held.
+    player.on('frame', () => {
+      for (const r of rows) {
+        const v = player.parameter(r.index);
+        if (document.activeElement !== r.slider) r.slider.value = v;
+        r.value.textContent = v.toFixed(2);
+      }
+    });
+
+    const idle = player.motions.find((m) => /idle/i.test(m.name)) ?? player.motions[0];
+    if (idle) player.playMotion(idle.index);
+    applyToggles();
+    player.start();
+  }
+
+  function applyToggles() {
+    if (!player) return;
+    player.setStage('physics', document.getElementById('physics').checked);
+    player.setStage('behaviours', document.getElementById('behaviours').checked);
+    const follow = document.getElementById('follow').checked;
+    if (follow && !stopFollowing) stopFollowing = player.followPointer();
+    if (!follow && stopFollowing) {
+      stopFollowing();
+      stopFollowing = null;
+    }
+  }
+  for (const id of ['follow', 'physics', 'behaviours']) document.getElementById(id).addEventListener('change', applyToggles);
+
+  document.getElementById('mic').addEventListener('click', async (e) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      player?.lipSync(stream);
+      e.target.classList.add('on');
+      e.target.disabled = true;
+    } catch (error) {
+      status.textContent = `microphone: ${error.message}`;
+    }
+  });
+
+  document.getElementById('folder').addEventListener('change', async (e) => {
+    try {
+      setUp(await AetherPlayer.fromFiles(canvas, e.target.files));
+    } catch (error) {
+      show(`Could not open that folder: ${error.message}`);
+    }
+  });
+
+  const url = new URLSearchParams(location.search).get('model') ?? 'model/model.json';
+  AetherPlayer.load(canvas, url)
+    .then(setUp)
+    .catch((error) =>
+      show(`No model at ${url} (${error.message}). Export one from Aether Canvas (File ▸ Export runtime model) and open its folder, or run runtime/web/build.sh --demo.`),
+    );
+</script>
+</body>
+</html>

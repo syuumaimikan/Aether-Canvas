@@ -92,10 +92,15 @@ arrives with the FFmpeg pipeline of Phase 8.
 - Generators: 3D head turn, sway, close, keyform mirroring, standard physics
 - One-click auto-rig from English/Japanese layer names
 - Layered PSD import and export
+- Runtime: an open runtime-model format (JSON + texture atlases), exported
+  from the editor or headlessly (`--auto-rig --export-model`); `aether-player`
+  running the editor's rig code, with a C ABI, a WebAssembly + WebGL web
+  player and a software renderer, all parity-tested against the editor
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group
-(part switching) editor, and runtimes for game engines.
+(part switching) editor, and ready-made engine packages (a Unity package and
+a Godot extension over the C ABI).
 
 ## Phase 7 — Motion graphics
 

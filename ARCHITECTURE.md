@@ -32,20 +32,24 @@ aether-desktop  (binary: window, CLI, logging)
       |
   aether-ui     (panels, tools, docking, app shell)
       |
-  aether-io     (.aether container, image import/export)
-      |
-aether-render   (compositor, render cache, viewport)
-      |
-aether-document (layer tree, document, commands, history)
-      |
-  aether-rig    (parameters, keyforms, deformers, bones, physics, motions)
-      |
+  aether-io     (.aether container, image/PSD import/export, model export)
+      |                 \
+aether-render           aether-player  (runtime: model format, player,
+      |                   |             C ABI = WebAssembly interface,
+aether-document           |             software renderer)
+      |                   |
+  aether-rig  <-----------'   (parameters, keyforms, deformers, bones,
+      |                        physics, motions)
  aether-raster  (pixmaps, tiles, blending, brush engine, filters, meshes)
       |
   aether-core   (math, colour, blend modes, ids, errors, input)
 ```
 
-That ordering is what makes the project testable: 250+ of the tests run with no
+`aether-player` sits beside the editor stack, not under it: it depends only
+on the rig and raster crates, so it compiles to a small WebAssembly module
+and a shared library with no document, UI or file-format code inside.
+
+That ordering is what makes the project testable: 500+ of the tests run with no
 window, no GPU and no filesystem.
 
 ## 3. Data model
@@ -198,6 +202,30 @@ its texture coordinate. Each deformer maps rest-space points, and nesting
 composes the maps; editing tools invert the chain locally (a numerical
 Jacobian) so drags land where the cursor is.
 
+## 5d. Runtime
+
+```text
+Document ─▶ runtime_model::export ─▶ model.json + texture atlases
+              (masks/effects baked,         │
+               groups folded, atlas packed) ▼
+                                      aether-player::Player
+                          RigRuntime.tick ─▶ Rig::evaluate ─▶ draw list
+                                                               │
+                  ┌──────────────┬───────────────┬─────────────┤
+                  ▼              ▼               ▼             ▼
+            WebGL (JS)     your engine (C)   cpu::render    Rust hosts
+            via WebAssembly
+```
+
+The player owns no rig logic of its own: it wraps the same `RigRuntime` and
+`Rig::evaluate` the editor calls, then flattens the result into a draw list
+(part, opacity, tint, blend, clipping mask) sorted exactly as the compositor
+sorts layers. Renderers only draw triangles. The C ABI is the single foreign
+interface — the WebAssembly module is that ABI compiled for `wasm32`, with no
+imports — so the web player and native hosts cannot disagree. The software
+renderer uses the compositor's own rasteriser and blend kernels, and the test
+suite holds every renderer to it. See [docs/RUNTIME.md](docs/RUNTIME.md).
+
 ## 6. Undo
 
 Every edit is a `Command` that can apply and reverse itself, stored in two
@@ -240,7 +268,8 @@ mid-save cannot destroy the previous version.
 
 Layered PSD is read (raw and RLE channels, folders, masks, Unicode names) and
 written, because that is how artwork arrives for rigging. Animation exports
-to GIF, PNG sequences and sprite sheets with a JSON atlas.
+to GIF, PNG sequences and sprite sheets with a JSON atlas, and rigged
+characters export as runtime models (section 5d).
 
 ## 9. Extensibility seams
 

@@ -391,32 +391,7 @@ impl EditorState {
 
     /// Generated meshes for the painted layers under `root` that lack one.
     fn missing_meshes(&self, root: Option<LayerId>) -> Vec<ArtMesh> {
-        let ids: Vec<LayerId> = match root {
-            Some(r) => self.doc.layers.subtree_ids(r),
-            None => self.doc.layers.iter().map(|l| l.id).collect(),
-        };
-        let mut meshes = Vec::new();
-        for id in ids {
-            if self.doc.rig.mesh(id).is_some() {
-                continue;
-            }
-            let Some(layer) = self.doc.layers.get(id) else {
-                continue;
-            };
-            let LayerContent::Raster(raster) = &layer.content else {
-                continue;
-            };
-            let Some(bounds) = automesh::opaque_bounds(&raster.pixmap, 8) else {
-                continue;
-            };
-            let options = AutoMeshOptions::for_bounds(bounds, self.rig.tool.mesh_density);
-            if let Some(generated) = automesh::auto_mesh(&raster.pixmap, &options) {
-                let mut mesh = ArtMesh::new(id, generated.vertices, generated.triangles);
-                mesh.name = layer.name.clone();
-                meshes.push(mesh);
-            }
-        }
-        meshes
+        aether_document::rigging::missing_meshes(&self.doc, root, self.rig.tool.mesh_density)
     }
 
     /// Rig the whole document from its layer names in one undoable step:
@@ -424,35 +399,9 @@ impl EditorState {
     /// behaviours and an idle motion (see
     /// [`autorig`](aether_document::rig::autorig)).
     pub fn auto_rig(&mut self) -> Result<aether_document::rig::autorig::AutoRigReport> {
-        use aether_document::rig::autorig::{self, PartInfo};
+        use aether_document::rig::autorig;
         let meshes = self.missing_meshes(None);
-        let mut parts = Vec::new();
-        for layer in self.doc.layers.iter() {
-            if !matches!(layer.content, LayerContent::Raster(_)) {
-                continue;
-            }
-            let bounds = match (
-                self.doc.rig.mesh(layer.id),
-                meshes.iter().find(|m| m.layer == layer.id),
-            ) {
-                (Some(m), _) | (None, Some(m)) => m.bounds(),
-                (None, None) => continue,
-            };
-            let mut groups = Vec::new();
-            let mut current = self.doc.layers.parent_of(layer.id);
-            while let Some(id) = current {
-                if let Some(g) = self.doc.layers.get(id) {
-                    groups.insert(0, g.name.clone());
-                }
-                current = self.doc.layers.parent_of(id);
-            }
-            parts.push(PartInfo {
-                layer: layer.id,
-                name: layer.name.clone(),
-                groups,
-                bounds,
-            });
-        }
+        let parts = aether_document::rigging::rig_parts(&self.doc, &meshes);
         let mut report = None;
         self.edit_rig("Auto rig", None, |rig, ids| {
             for mesh in meshes {
@@ -1244,6 +1193,39 @@ impl EditorState {
         }
     }
 
+    /// Write the runtime model — `model.json` plus texture atlases, for
+    /// games and the web player — into `dir`. Returns what the export had to
+    /// approximate.
+    pub fn export_runtime_model(&mut self, dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let dir = dir.as_ref();
+        let export = aether_io::runtime_model::export_model_to_dir(&self.doc, dir, &Default::default())?;
+        for warning in &export.warnings {
+            tracing::warn!("runtime model: {warning}");
+        }
+        self.status = match export.warnings.first() {
+            None => format!(
+                "Exported runtime model to {} ({} parts)",
+                dir.display(),
+                export.model.parts.len()
+            ),
+            Some(first) => format!(
+                "Exported runtime model to {} — {} note(s): {first}",
+                dir.display(),
+                export.warnings.len()
+            ),
+        };
+        Ok(export.warnings)
+    }
+
+    /// Ask for a folder, then export the runtime model into it.
+    pub fn export_runtime_model_via_dialog(&mut self) {
+        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+            if let Err(error) = self.export_runtime_model(dir) {
+                self.report_error("Export runtime model", &error);
+            }
+        }
+    }
+
     /// Ask for a WAV file, then load it.
     pub fn load_audio_via_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
@@ -1578,5 +1560,22 @@ mod tests {
         state.add_layer().expect("empty layer");
         assert_eq!(state.mesh_all_layers(None).expect("mesh"), 2);
         assert_eq!(state.mesh_all_layers(None).expect("again"), 0);
+    }
+
+    #[test]
+    fn the_runtime_model_exports_from_the_editor() {
+        let mut state = painted_state();
+        state.mesh_all_layers(None).expect("mesh");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let notes = state.export_runtime_model(dir.path()).expect("export");
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(
+            state.status.starts_with("Exported runtime model"),
+            "{}",
+            state.status
+        );
+        let (model, textures) = aether_io::runtime_model::load_model(dir.path()).expect("load");
+        assert_eq!(model.parts.len(), 1);
+        assert_eq!(textures.len(), 1);
     }
 }

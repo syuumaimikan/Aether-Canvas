@@ -1,8 +1,8 @@
 //! Command line handling.
 //!
-//! Deliberately tiny: the application is a GUI, and the only argument it needs
-//! is an optional file to open. Keeping this hand-rolled avoids pulling an
-//! argument parser into the desktop binary for three flags.
+//! Deliberately tiny: the application is a GUI, and mostly needs an optional
+//! file to open. Keeping this hand-rolled avoids pulling an argument parser
+//! into the desktop binary for a handful of flags.
 
 use std::path::PathBuf;
 
@@ -15,6 +15,11 @@ pub struct Cli {
     pub help: bool,
     /// Print the version and exit.
     pub version: bool,
+    /// Export the file as a runtime model into this directory, without
+    /// opening a window.
+    pub export_model: Option<PathBuf>,
+    /// Rig the file from its layer names before exporting.
+    pub auto_rig: bool,
     /// Arguments that were not understood.
     pub unknown: Vec<String>,
 }
@@ -30,8 +35,17 @@ ARGS:
     <FILE>    A .aether project, a layered .psd, or an image to import
 
 OPTIONS:
-    -h, --help       Print this help
-    -V, --version    Print version information
+        --export-model <DIR>    Write FILE as a runtime model (model.json and
+                                texture atlases) for games and the web player,
+                                then exit without opening a window
+        --auto-rig              With --export-model: rig FILE from its layer
+                                names first (for a PSD straight from a
+                                painting app)
+    -h, --help                  Print this help
+    -V, --version               Print version information
+
+EXAMPLE:
+    aether-canvas --auto-rig --export-model web/model character.psd
 ";
 
 /// Parse arguments (excluding the executable name).
@@ -41,11 +55,20 @@ where
     S: AsRef<str>,
 {
     let mut cli = Cli::default();
-    for arg in args {
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
         let arg = arg.as_ref();
         match arg {
             "-h" | "--help" => cli.help = true,
             "-V" | "--version" => cli.version = true,
+            "--auto-rig" => cli.auto_rig = true,
+            "--export-model" => match args.next() {
+                Some(dir) => cli.export_model = Some(PathBuf::from(dir.as_ref())),
+                None => cli.unknown.push("--export-model (needs a directory)".to_string()),
+            },
+            other if other.starts_with("--export-model=") => {
+                cli.export_model = Some(PathBuf::from(&other["--export-model=".len()..]));
+            }
             other if other.starts_with('-') => cli.unknown.push(other.to_string()),
             other => {
                 if cli.open.is_none() {
@@ -87,5 +110,18 @@ mod tests {
         let cli = parse(["--frobnicate", "a.png", "b.png"]);
         assert_eq!(cli.unknown, vec!["--frobnicate".to_string(), "b.png".to_string()]);
         assert_eq!(cli.open, Some(PathBuf::from("a.png")));
+    }
+
+    #[test]
+    fn model_export_takes_a_directory() {
+        let cli = parse(["--auto-rig", "--export-model", "out/model", "character.psd"]);
+        assert!(cli.auto_rig);
+        assert_eq!(cli.export_model, Some(PathBuf::from("out/model")));
+        assert_eq!(cli.open, Some(PathBuf::from("character.psd")));
+        assert!(cli.unknown.is_empty());
+
+        let cli = parse(["--export-model=web", "a.aether"]);
+        assert_eq!(cli.export_model, Some(PathBuf::from("web")));
+        assert_eq!(parse(["--export-model"]).unknown.len(), 1);
     }
 }

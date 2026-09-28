@@ -140,3 +140,9 @@ serde form of `aether_rig::Rig`.
   the rest of the document is intact.
 - A layer referenced by a broken parent link is reattached at the root instead
   of being dropped.
+
+## Runtime models
+
+The `.aether` project is the editing format. Rigged characters leave the
+editor as a separate, player-facing **runtime model** — `model.json` plus
+PNG texture atlases — described in [RUNTIME.md](RUNTIME.md#the-model-format).

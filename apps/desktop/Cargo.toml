@@ -26,4 +26,6 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 aether-raster.workspace = true
+aether-player.workspace = true
+serde_json.workspace = true
 tempfile = "3"

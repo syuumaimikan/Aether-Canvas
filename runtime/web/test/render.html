@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Render parity</title>
+<canvas id="canvas" style="display:block"></canvas>
+<script type="module">
+  import { AetherPlayer } from '../aether-player.js';
+
+  async function referencePixels(url, width, height) {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d', { colorSpace: 'srgb' });
+    context.drawImage(image, 0, 0);
+    return context.getImageData(0, 0, width, height).data;
+  }
+
+  // Draw every reference pose with WebGL and compare, premultiplied, with
+  // the software player's render of the same pose.
+  window.runParity = async ({ webgl = 2 } = {}) => {
+    let canvas = document.getElementById('canvas');
+    if (webgl === 1) {
+      // Claim the canvas with WebGL 1 first; the player then uses it.
+      canvas = document.createElement('canvas');
+      document.body.append(canvas);
+      canvas.getContext('webgl', { premultipliedAlpha: true, antialias: false });
+    }
+    const player = await AetherPlayer.load(canvas, '../model/model.json');
+    const { model, renderer } = player;
+    canvas.width = model.width;
+    canvas.height = model.height;
+    const gl = renderer.gl;
+    const poses = await (await fetch('reference/poses.json')).json();
+    const results = [];
+    for (const pose of poses) {
+      model.reset();
+      for (const [name, value] of Object.entries(pose.values)) model.setParameter(name, value);
+      model.update();
+      renderer.render();
+      const w = canvas.width;
+      const h = canvas.height;
+      const gpu = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, gpu);
+      const cpu = await referencePixels(`reference/${pose.image}`, w, h);
+      let worst = 0;
+      let total = 0;
+      let over8 = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const g = ((h - 1 - y) * w + x) * 4; // GL rows run bottom-up
+          const c = (y * w + x) * 4;
+          const a = cpu[c + 3];
+          for (let k = 0; k < 4; k++) {
+            const expected = k === 3 ? a : Math.round((cpu[c + k] * a) / 255);
+            const d = Math.abs(gpu[g + k] - expected);
+            worst = Math.max(worst, d);
+            total += d;
+            if (d > 8) over8++;
+          }
+        }
+      }
+      results.push({ name: pose.name, worst, mean: total / (w * h * 4), over8, pixels: w * h * 4 });
+    }
+    // Leave a posed, animated frame on screen for a screenshot.
+    model.reset();
+    model.playMotion(0);
+    for (let i = 0; i < 45; i++) model.tick(1 / 60);
+    renderer.background = [0.965, 0.953, 0.933, 1];
+    renderer.render();
+    return { results, webgl2: typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext };
+  };
+</script>
