@@ -1397,7 +1397,7 @@ fn live2d_name(path: &Path) -> String {
 }
 
 /// A status line, with the first of any notes.
-fn with_notes(message: String, notes: &[String]) -> String {
+pub(crate) fn with_notes(message: String, notes: &[String]) -> String {
     match notes.first() {
         None => message,
         Some(first) => format!("{message} — {} note(s): {first}", notes.len()),

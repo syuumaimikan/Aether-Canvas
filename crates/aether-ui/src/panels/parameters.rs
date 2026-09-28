@@ -174,7 +174,8 @@ fn parameter_row(ui: &mut Ui, state: &mut EditorState, id: ParameterId) {
         .unwrap_or(false);
 
     ui.horizontal(|ui| {
-        let mut label = RichText::new(&p.name);
+        // Imported models carry display names (Live2D's cdi3.json).
+        let mut label = RichText::new(if p.label.is_empty() { &p.name } else { &p.label });
         if keys.is_some() {
             label = label.strong().color(Color32::from_rgb(250, 205, 110));
         }
@@ -183,7 +184,11 @@ fn parameter_row(ui: &mut Ui, state: &mut EditorState, id: ParameterId) {
                 [96.0, 18.0],
                 egui::Label::new(label).truncate().sense(egui::Sense::click()),
             )
-            .on_hover_text(format!("{} … {} (default {})", p.min, p.max, p.default));
+            .on_hover_text(if p.label.is_empty() {
+                format!("{} … {} (default {})", p.min, p.max, p.default)
+            } else {
+                format!("{} · {} … {} (default {})", p.name, p.min, p.max, p.default)
+            });
         name.context_menu(|ui| parameter_menu(ui, state, id));
         if name.double_clicked() {
             state.rig.editing_parameter = Some(p.clone());
