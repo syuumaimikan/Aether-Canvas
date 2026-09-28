@@ -389,6 +389,25 @@ impl EditorState {
         Ok(())
     }
 
+    /// Open a layered Photoshop document: layers, folders, blend modes,
+    /// opacity, clipping and masks come across.
+    pub fn open_psd(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let doc = aether_io::psd::load_psd_file(path.as_ref())?;
+        self.set_document(doc, None);
+        self.status = format!("Imported {} layers", self.doc.layer_count());
+        Ok(())
+    }
+
+    /// Write the document as a layered Photoshop file.
+    pub fn export_psd(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let composite = self.compositor.render(&self.doc);
+        let bytes = aether_io::psd::save_psd(&self.doc, &composite)?;
+        std::fs::write(path, bytes)?;
+        self.status = format!("Exported {}", path.display());
+        Ok(())
+    }
+
     /// Import an image as a new document.
     pub fn open_image(&mut self, path: impl AsRef<Path>) -> Result<()> {
         let pixmap = aether_io::load_image(path.as_ref())?;
@@ -1402,6 +1421,19 @@ mod tests {
         let back = aether_io::load_image(&path).expect("read back");
         assert_eq!(back.get(5, 5), Rgba8::new(10, 120, 200, 255));
         assert_eq!((back.width(), back.height()), (64, 64));
+    }
+
+    #[test]
+    fn psd_files_open_and_export_with_their_layers() {
+        let mut state = state();
+        state.add_layer().expect("layer");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("parts.psd");
+        state.export_psd(&path).expect("export");
+        state.new_document(8, 8, "other");
+        state.open_psd(&path).expect("open");
+        assert_eq!(state.doc.layer_count(), 2);
+        assert_eq!(state.doc.name, "parts");
     }
 
     #[test]

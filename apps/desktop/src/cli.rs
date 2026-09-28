@@ -27,7 +27,7 @@ USAGE:
     aether-canvas [OPTIONS] [FILE]
 
 ARGS:
-    <FILE>    A .aether project, or an image to import
+    <FILE>    A .aether project, a layered .psd, or an image to import
 
 OPTIONS:
     -h, --help       Print this help

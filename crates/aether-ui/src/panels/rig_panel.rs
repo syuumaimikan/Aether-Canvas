@@ -44,6 +44,15 @@ fn toolbar(ui: &mut Ui, state: &mut EditorState) {
     let lang = state.language;
     ui.horizontal_wrapped(|ui| {
         if ui
+            .button(format!("{} {}", icons::WAND, lang.tr("rig.auto_rig")))
+            .on_hover_text(lang.tr("rig.auto_rig_hint"))
+            .clicked()
+        {
+            if let Err(e) = state.auto_rig() {
+                state.report_error("Auto rig", &e);
+            }
+        }
+        if ui
             .button(lang.tr("rig.mesh_layer"))
             .on_hover_text(lang.tr("rig.mesh_layer_hint"))
             .clicked()

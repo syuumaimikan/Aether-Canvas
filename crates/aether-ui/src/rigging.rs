@@ -376,6 +376,21 @@ impl EditorState {
     /// document for `None`) that has no mesh yet. Returns how many were
     /// meshed.
     pub fn mesh_all_layers(&mut self, root: Option<LayerId>) -> Result<usize> {
+        let meshes = self.missing_meshes(root);
+        let count = meshes.len();
+        if count > 0 {
+            self.edit_rig("Mesh layers", None, |rig, _| {
+                for mesh in meshes {
+                    rig.set_mesh(mesh);
+                }
+                Ok(())
+            })?;
+        }
+        Ok(count)
+    }
+
+    /// Generated meshes for the painted layers under `root` that lack one.
+    fn missing_meshes(&self, root: Option<LayerId>) -> Vec<ArtMesh> {
         let ids: Vec<LayerId> = match root {
             Some(r) => self.doc.layers.subtree_ids(r),
             None => self.doc.layers.iter().map(|l| l.id).collect(),
@@ -401,16 +416,67 @@ impl EditorState {
                 meshes.push(mesh);
             }
         }
-        let count = meshes.len();
-        if count > 0 {
-            self.edit_rig("Mesh layers", None, |rig, _| {
-                for mesh in meshes {
-                    rig.set_mesh(mesh);
+        meshes
+    }
+
+    /// Rig the whole document from its layer names in one undoable step:
+    /// mesh every painted layer, then build deformers, keyforms, physics,
+    /// behaviours and an idle motion (see
+    /// [`autorig`](aether_document::rig::autorig)).
+    pub fn auto_rig(&mut self) -> Result<aether_document::rig::autorig::AutoRigReport> {
+        use aether_document::rig::autorig::{self, PartInfo};
+        let meshes = self.missing_meshes(None);
+        let mut parts = Vec::new();
+        for layer in self.doc.layers.iter() {
+            if !matches!(layer.content, LayerContent::Raster(_)) {
+                continue;
+            }
+            let bounds = match (
+                self.doc.rig.mesh(layer.id),
+                meshes.iter().find(|m| m.layer == layer.id),
+            ) {
+                (Some(m), _) | (None, Some(m)) => m.bounds(),
+                (None, None) => continue,
+            };
+            let mut groups = Vec::new();
+            let mut current = self.doc.layers.parent_of(layer.id);
+            while let Some(id) = current {
+                if let Some(g) = self.doc.layers.get(id) {
+                    groups.insert(0, g.name.clone());
                 }
-                Ok(())
-            })?;
+                current = self.doc.layers.parent_of(id);
+            }
+            parts.push(PartInfo {
+                layer: layer.id,
+                name: layer.name.clone(),
+                groups,
+                bounds,
+            });
         }
-        Ok(count)
+        let mut report = None;
+        self.edit_rig("Auto rig", None, |rig, ids| {
+            for mesh in meshes {
+                rig.set_mesh(mesh);
+            }
+            report = Some(autorig::auto_rig(rig, ids, &parts)?);
+            Ok(())
+        })?;
+        let report = report.unwrap_or_default();
+        self.rig.tool.selection = self
+            .doc
+            .rig
+            .deformers
+            .iter()
+            .find(|d| d.name == "Head")
+            .map(|d| RigNode::Deformer(d.id));
+        let parts: usize = report.roles.iter().map(|(_, n)| n).sum();
+        self.status = format!(
+            "Auto rig: {parts} parts, {} deformers, {} physics chains, {} unrecognised",
+            report.deformers,
+            report.physics,
+            report.unrecognised.len()
+        );
+        Ok(report)
     }
 
     /// Remove a layer's mesh.
@@ -1466,6 +1532,39 @@ mod tests {
         assert!(
             tail.distance(Vec2::new(10.0, 40.0)) < 1e-2,
             "turned a quarter: {tail:?}"
+        );
+    }
+
+    #[test]
+    fn auto_rig_builds_a_working_rig_in_one_undo_step() {
+        let mut state = EditorState::new(aether_document::Document::new(200, 240, "auto"));
+        let face = state.doc.active_layer;
+        let paint = |state: &mut EditorState, id: LayerId, name: &str, rect: IRect| {
+            if let Some(layer) = state.doc.layers.get_mut(id) {
+                layer.name = name.into();
+                if let Some(pm) = layer.pixmap_mut() {
+                    pm.fill_rect(rect, Rgba8::rgb(230, 200, 180));
+                }
+            }
+        };
+        paint(&mut state, face, "顔", IRect::new(50, 40, 100, 120));
+        let eye = state.add_layer().expect("layer");
+        paint(&mut state, eye, "白目 左", IRect::new(70, 80, 20, 12));
+        let hair = state.add_layer().expect("layer");
+        paint(&mut state, hair, "前髪", IRect::new(45, 30, 110, 40));
+        let before = state.history.entries().len();
+        let report = state.auto_rig().expect("auto rig");
+        assert_eq!(state.history.entries().len(), before + 1, "one undo step");
+        assert!(report.unrecognised.is_empty());
+        assert!(state.doc.rig.meshes.len() == 3);
+        assert!(matches!(state.rig.tool.selection, Some(RigNode::Deformer(_))));
+        let open = param(&state, "EyeLOpen");
+        state.set_parameter_value(open, 0.0).expect("blink");
+        assert!(!state.doc.rig.evaluate().meshes[&eye].rest);
+        state.history.undo(&mut state.doc).expect("undo");
+        assert!(
+            state.doc.rig.meshes.is_empty(),
+            "undo removes meshes and rig together"
         );
     }
 

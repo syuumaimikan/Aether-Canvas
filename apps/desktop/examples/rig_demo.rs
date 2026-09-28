@@ -72,6 +72,60 @@ fn main() -> aether_core::Result<()> {
     aether_io::save_png(&sheet, &sheet_path)?;
     println!("wrote {}", sheet_path.display());
 
+    // The same artwork rigged automatically, from nothing but its layer
+    // names, and played with its generated Idle motion plus physics.
+    let (mut auto, _) = paint_character();
+    let report = auto_rig_document(&mut auto)?;
+    println!(
+        "auto rig: {} parts, {} deformers, {} physics chains, unrecognised {:?}",
+        report.roles.iter().map(|(_, n)| n).sum::<usize>(),
+        report.deformers,
+        report.physics,
+        report.unrecognised
+    );
+    let auto_settings = AnimationSettings {
+        motion: auto.rig.motions.iter().position(|m| m.name == "Idle"),
+        ..settings.clone()
+    };
+    let auto_frames = animation::render_frames(&auto, &compositor, &auto_settings)?;
+    animation::export_gif(
+        &auto_frames,
+        out.join("aether-chan-auto.gif"),
+        auto_settings.fps,
+        background,
+    )?;
+    let mut auto_poses = Vec::new();
+    for values in [
+        vec![],
+        vec![("AngleX", 30.0), ("AngleY", 12.0), ("EyeBallX", 0.8)],
+        vec![
+            ("AngleX", -30.0),
+            ("EyeLOpen", 0.0),
+            ("EyeROpen", 0.0),
+            ("MouthForm", 1.0),
+        ],
+        vec![
+            ("AngleZ", -25.0),
+            ("MouthOpenY", 1.0),
+            ("Cheek", 1.0),
+            ("BrowLY", 1.0),
+            ("BrowRY", 1.0),
+            ("HairSide", 1.0),
+        ],
+    ] {
+        let mut posed = auto.clone();
+        for (param, value) in values {
+            if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
+                posed.rig.set_value(id, value);
+            }
+        }
+        auto_poses.push(animation::flatten(&compositor.render(&posed), background));
+    }
+    let (auto_sheet, _) = animation::pack_sprite_sheet(&auto_poses, Some(4))?;
+    aether_io::save_png(&auto_sheet, out.join("aether-chan-auto-poses.png"))?;
+    aether_io::save_project(&auto, out.join("aether-chan-auto.aether"))?;
+    println!("wrote the auto-rigged variant");
+
     // Full-size stills of a few distinct poses.
     for (name, values) in [
         ("rest", vec![]),
@@ -618,6 +672,33 @@ fn rig_character(doc: &mut Document, l: &Layers) -> aether_core::Result<()> {
     );
     let _ = Rect::ZERO;
     Ok(())
+}
+
+/// Mesh every layer and rig the document from its layer names — what the
+/// editor's "Auto rig" button does.
+fn auto_rig_document(
+    doc: &mut Document,
+) -> aether_core::Result<aether_document::rig::autorig::AutoRigReport> {
+    use aether_document::rig::autorig::{auto_rig, PartInfo};
+    let mut parts = Vec::new();
+    for layer in doc.layers.iter() {
+        let Some(pixmap) = layer.pixmap() else { continue };
+        let Some(bounds) = aether_document::rig::automesh::opaque_bounds(pixmap, 8) else {
+            continue;
+        };
+        let Some(generated) = auto_mesh(pixmap, &AutoMeshOptions::for_bounds(bounds, 1.2)) else {
+            continue;
+        };
+        let mesh = ArtMesh::new(layer.id, generated.vertices, generated.triangles);
+        parts.push(PartInfo {
+            layer: layer.id,
+            name: layer.name.clone(),
+            groups: Vec::new(),
+            bounds: mesh.bounds(),
+        });
+        doc.rig.set_mesh(mesh);
+    }
+    auto_rig(&mut doc.rig, &doc.ids, &parts)
 }
 
 // ------------------------------------------------------------ shape painting

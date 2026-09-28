@@ -124,12 +124,14 @@ impl AetherApp {
 
     /// Open a project or an image, choosing by extension.
     fn open_path(&mut self, path: PathBuf) {
-        let is_project = path
+        let extension = path
             .extension()
-            .map(|e| e.eq_ignore_ascii_case(project::EXTENSION))
-            .unwrap_or(false);
-        let result = if is_project {
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let result = if extension == project::EXTENSION {
             self.state.open_project(&path)
+        } else if extension == "psd" {
+            self.state.open_psd(&path)
         } else {
             self.state.open_image(&path)
         };
@@ -142,7 +144,22 @@ impl AetherApp {
 
     fn pick_and_open(&mut self) {
         let picked = rfd::FileDialog::new()
+            .add_filter(
+                "Aether project, Photoshop or image",
+                &[
+                    project::EXTENSION,
+                    "psd",
+                    "png",
+                    "jpg",
+                    "jpeg",
+                    "webp",
+                    "tiff",
+                    "bmp",
+                    "gif",
+                ],
+            )
             .add_filter("Aether project", &[project::EXTENSION])
+            .add_filter("Photoshop", &["psd"])
             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "tiff", "bmp", "gif"])
             .pick_file();
         if let Some(path) = picked {
@@ -216,6 +233,18 @@ impl AetherApp {
                     if self.menu_item(ui, key, action) {
                         ui.close();
                     }
+                }
+                if ui.button(lang.tr("menu.file.export_psd")).clicked() {
+                    let picked = rfd::FileDialog::new()
+                        .add_filter("Photoshop", &["psd"])
+                        .set_file_name(format!("{}.psd", self.state.doc.name))
+                        .save_file();
+                    if let Some(path) = picked {
+                        if let Err(error) = self.state.export_psd(path) {
+                            self.state.report_error("Export PSD", &error);
+                        }
+                    }
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button(lang.tr("menu.file.quit")).clicked() {
@@ -385,6 +414,15 @@ impl AetherApp {
         let lang = self.state.language;
         let state = &mut self.state;
         let mut result: Option<(&str, aether_core::Result<()>)> = None;
+        if ui
+            .button(format!("{} {}", crate::icons::WAND, lang.tr("rig.auto_rig")))
+            .on_hover_text(lang.tr("rig.auto_rig_hint"))
+            .clicked()
+        {
+            result = Some(("Auto rig", state.auto_rig().map(|_| ())));
+            ui.close();
+        }
+        ui.separator();
         if ui.button(lang.tr("rig.mesh_layer")).clicked() {
             let layer = state.doc.active_layer;
             result = Some(("Mesh", state.mesh_layer(layer)));

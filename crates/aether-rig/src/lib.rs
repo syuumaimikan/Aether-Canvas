@@ -26,6 +26,7 @@
 //!   (live, or baked from a WAV file).
 //! * [`automesh`] / [`generate`] — automatic meshing, 3D head-turn
 //!   generation, keyform mirroring and standard physics setup.
+//! * [`autorig`] — a complete rig from layer names in one call.
 //! * [`rig`] / [`pose`] / [`runtime`] — the rig container, pure evaluation
 //!   to a [`RigPose`], and the time-dependent runtime.
 //!
@@ -35,6 +36,7 @@
 
 pub mod audio;
 pub mod automesh;
+pub mod autorig;
 pub mod behaviour;
 pub mod deformer;
 pub mod driver;
