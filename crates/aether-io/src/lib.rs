@@ -12,6 +12,8 @@
 //!   and sprite sheets.
 //! * [`psd`] – layered Photoshop documents in and out, the usual hand-off
 //!   format for artwork that is about to be rigged.
+//! * [`live2d`] – Live2D Cubism motions (`.motion3.json`) and expressions
+//!   (`.exp3.json`), in and out.
 //! * [`runtime_model`] – runtime models (`model.json` + texture atlases) for
 //!   `aether-player` in games, apps and on the web.
 //!
@@ -22,6 +24,7 @@
 pub mod animation;
 pub mod brush_io;
 pub mod image_io;
+pub mod live2d;
 pub mod project;
 pub mod psd;
 pub mod runtime_model;

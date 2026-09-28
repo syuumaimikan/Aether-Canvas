@@ -1226,6 +1226,135 @@ impl EditorState {
         }
     }
 
+    // ------------------------------------------------- Live2D interchange
+
+    /// Import a Live2D motion (`.motion3.json`) as a new motion, in one undo
+    /// step, and show it in the timeline. Returns what could not be carried
+    /// over (curves for parameters this rig lacks, part opacity).
+    pub fn import_live2d_motion(&mut self, path: impl AsRef<Path>) -> Result<Vec<String>> {
+        let path = path.as_ref();
+        let json = std::fs::read_to_string(path)?;
+        let name = live2d_name(path);
+        let (motion, notes) = aether_io::live2d::import_motion(&json, &self.doc.rig, &name)?;
+        let mut index = 0;
+        self.edit_rig("Import Live2D motion", None, |rig, _| {
+            rig.motions.push(motion);
+            index = rig.motions.len() - 1;
+            Ok(())
+        })?;
+        self.rig.motion = Some(index);
+        self.rig.playhead = 0.0;
+        self.rig.animate = true;
+        self.status = with_notes(format!("Imported motion \"{name}\""), &notes);
+        Ok(notes)
+    }
+
+    /// Write motion `index` as a Live2D `.motion3.json`.
+    pub fn export_live2d_motion(&mut self, index: usize, path: impl AsRef<Path>) -> Result<()> {
+        let motion = self
+            .doc
+            .rig
+            .motions
+            .get(index)
+            .ok_or_else(|| AetherError::rig("no such motion"))?;
+        let json = aether_io::live2d::export_motion(motion, &self.doc.rig);
+        std::fs::write(path.as_ref(), json)?;
+        self.status = format!("Exported {}", path.as_ref().display());
+        Ok(())
+    }
+
+    /// Import a Live2D expression (`.exp3.json`), in one undo step.
+    pub fn import_live2d_expression(&mut self, path: impl AsRef<Path>) -> Result<Vec<String>> {
+        let path = path.as_ref();
+        let json = std::fs::read_to_string(path)?;
+        let name = live2d_name(path);
+        let (expression, notes) = aether_io::live2d::import_expression(&json, &self.doc.rig, &name)?;
+        self.edit_rig("Import Live2D expression", None, |rig, _| {
+            rig.expressions.push(expression);
+            Ok(())
+        })?;
+        self.status = with_notes(format!("Imported expression \"{name}\""), &notes);
+        Ok(notes)
+    }
+
+    /// Write expression `index` as a Live2D `.exp3.json`.
+    pub fn export_live2d_expression(&mut self, index: usize, path: impl AsRef<Path>) -> Result<()> {
+        let expression = self
+            .doc
+            .rig
+            .expressions
+            .get(index)
+            .ok_or_else(|| AetherError::rig("no such expression"))?;
+        let json = aether_io::live2d::export_expression(expression, &self.doc.rig);
+        std::fs::write(path.as_ref(), json)?;
+        self.status = format!("Exported {}", path.as_ref().display());
+        Ok(())
+    }
+
+    /// Ask for a `.motion3.json`, then import it.
+    pub fn import_live2d_motion_via_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Live2D motion", &["json"])
+            .pick_file()
+        {
+            if let Err(error) = self.import_live2d_motion(path) {
+                self.report_error("Import Live2D motion", &error);
+            }
+        }
+    }
+
+    /// Ask where to write motion `index` as `.motion3.json`.
+    pub fn export_live2d_motion_via_dialog(&mut self, index: usize) {
+        let name = self
+            .doc
+            .rig
+            .motions
+            .get(index)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Live2D motion", &["json"])
+            .set_file_name(format!("{name}.motion3.json"))
+            .save_file()
+        {
+            if let Err(error) = self.export_live2d_motion(index, path) {
+                self.report_error("Export Live2D motion", &error);
+            }
+        }
+    }
+
+    /// Ask for an `.exp3.json`, then import it.
+    pub fn import_live2d_expression_via_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Live2D expression", &["json"])
+            .pick_file()
+        {
+            if let Err(error) = self.import_live2d_expression(path) {
+                self.report_error("Import Live2D expression", &error);
+            }
+        }
+    }
+
+    /// Ask where to write expression `index` as `.exp3.json`.
+    pub fn export_live2d_expression_via_dialog(&mut self, index: usize) {
+        let name = self
+            .doc
+            .rig
+            .expressions
+            .get(index)
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Live2D expression", &["json"])
+            .set_file_name(format!("{name}.exp3.json"))
+            .save_file()
+        {
+            if let Err(error) = self.export_live2d_expression(index, path) {
+                self.report_error("Export Live2D expression", &error);
+            }
+        }
+    }
+
     /// Ask for a WAV file, then load it.
     pub fn load_audio_via_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
@@ -1236,6 +1365,28 @@ impl EditorState {
                 self.report_error("Load audio", &error);
             }
         }
+    }
+}
+
+/// A motion or expression name from a Live2D file name
+/// (`wave.motion3.json` → `wave`).
+fn live2d_name(path: &Path) -> String {
+    let file = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    [".motion3.json", ".exp3.json", ".json"]
+        .iter()
+        .find_map(|ext| file.strip_suffix(ext))
+        .unwrap_or(&file)
+        .to_string()
+}
+
+/// A status line, with the first of any notes.
+fn with_notes(message: String, notes: &[String]) -> String {
+    match notes.first() {
+        None => message,
+        Some(first) => format!("{message} — {} note(s): {first}", notes.len()),
     }
 }
 
@@ -1577,5 +1728,45 @@ mod tests {
         let (model, textures) = aether_io::runtime_model::load_model(dir.path()).expect("load");
         assert_eq!(model.parts.len(), 1);
         assert_eq!(textures.len(), 1);
+    }
+
+    #[test]
+    fn live2d_motions_and_expressions_round_trip_through_the_editor() {
+        let mut state = painted_state();
+        state.add_standard_parameters().expect("parameters");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let motion = dir.path().join("wave.motion3.json");
+        std::fs::write(
+            &motion,
+            r#"{"Version":3,"Meta":{"Duration":2,"Fps":30,"Loop":true},
+               "Curves":[{"Target":"Parameter","Id":"ParamAngleX","Segments":[0,0,0,2,30]},
+                         {"Target":"Parameter","Id":"ParamUnknown","Segments":[0,0,0,2,1]}]}"#,
+        )
+        .expect("write");
+        let before = state.history.entries().len();
+        let notes = state.import_live2d_motion(&motion).expect("import");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(state.history.entries().len(), before + 1, "one undo step");
+        let index = state.rig.motion.expect("shown in the timeline");
+        assert_eq!(state.doc.rig.motions[index].name, "wave");
+        assert!(state.status.contains("1 note"), "{}", state.status);
+
+        let out = dir.path().join("out.motion3.json");
+        state.export_live2d_motion(index, &out).expect("export");
+        assert!(std::fs::read_to_string(&out).unwrap().contains("ParamAngleX"));
+
+        let smile = dir.path().join("smile.exp3.json");
+        std::fs::write(
+            &smile,
+            r#"{"Type":"Live2D Expression","Parameters":[{"Id":"ParamMouthForm","Value":1,"Blend":"Overwrite"}]}"#,
+        )
+        .expect("write");
+        assert!(state.import_live2d_expression(&smile).expect("import").is_empty());
+        let e = state.doc.rig.expressions.len() - 1;
+        assert_eq!(state.doc.rig.expressions[e].name, "smile");
+        state
+            .export_live2d_expression(e, dir.path().join("x.exp3.json"))
+            .expect("export");
+        assert!(state.export_live2d_motion(99, dir.path().join("y.json")).is_err());
     }
 }

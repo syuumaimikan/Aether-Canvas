@@ -98,6 +98,8 @@ arrives with the FFmpeg pipeline of Phase 8.
   player and a software renderer, all parity-tested against the editor
 - Face tracking: one mapping from ARKit/MediaPipe-style trackers onto the
   standard parameters, and webcam tracking in the web player
+- Live2D interchange: motions (`.motion3.json`) and expressions
+  (`.exp3.json`), both ways
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group

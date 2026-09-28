@@ -71,6 +71,9 @@ project, one document model and one timeline.
   look-at and lip sync baked from WAV
 - Rigged layers keep every blend mode, mask, clipping group and effect
 - Export GIF, PNG sequences and sprite sheets; import and export layered PSD
+- Import and export Live2D motions (`.motion3.json`) and expressions
+  (`.exp3.json`): bring them along, or animate existing Live2D models with
+  Aether's timeline
 - An honest comparison with Live2D Cubism is in
   [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
 

@@ -65,12 +65,26 @@ fn motion_bar(ui: &mut Ui, state: &mut EditorState) {
                 state.report_error("Motion", &e);
             }
         }
+        if ui
+            .button(lang.tr("timeline.import_live2d"))
+            .on_hover_text(lang.tr("timeline.import_live2d_hint"))
+            .clicked()
+        {
+            state.import_live2d_motion_via_dialog();
+        }
         if let Some(m) = state.rig.motion.filter(|m| *m < state.doc.rig.motions.len()) {
             if ui.button(lang.tr("timeline.delete")).clicked() {
                 if let Err(e) = state.delete_motion(m) {
                     state.report_error("Motion", &e);
                 }
                 return;
+            }
+            if ui
+                .button(lang.tr("timeline.export_live2d"))
+                .on_hover_text(lang.tr("timeline.export_live2d_hint"))
+                .clicked()
+            {
+                state.export_live2d_motion_via_dialog(m);
             }
             let mut motion = state.doc.rig.motions[m].clone();
             let before = motion.clone();

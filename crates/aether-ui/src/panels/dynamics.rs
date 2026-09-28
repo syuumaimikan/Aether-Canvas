@@ -453,10 +453,18 @@ fn expressions_section(ui: &mut Ui, state: &mut EditorState) {
                 Err(e) => state.report_error("Expression", &e),
             }
         }
+        if ui
+            .button(lang.tr("dyn.import_live2d"))
+            .on_hover_text(lang.tr("dyn.import_live2d_hint"))
+            .clicked()
+        {
+            state.import_live2d_expression_via_dialog();
+        }
     });
     let active = state.rig.runtime.active_expression();
     let names: Vec<String> = state.doc.rig.expressions.iter().map(|e| e.name.clone()).collect();
     let mut remove = None;
+    let mut export = None;
     for (i, name) in names.iter().enumerate() {
         ui.horizontal(|ui| {
             let on = active == Some(i);
@@ -468,10 +476,20 @@ fn expressions_section(ui: &mut Ui, state: &mut EditorState) {
                 state.rig.runtime.set_expression(if on { None } else { Some(i) });
                 state.rig.simulate = true;
             }
+            if ui
+                .small_button(lang.tr("dyn.export_live2d"))
+                .on_hover_text(lang.tr("dyn.export_live2d_hint"))
+                .clicked()
+            {
+                export = Some(i);
+            }
             if ui.small_button(icons::DELETE).clicked() {
                 remove = Some(i);
             }
         });
+    }
+    if let Some(i) = export {
+        state.export_live2d_expression_via_dialog(i);
     }
     if let Some(i) = remove {
         let r = state.edit_rig("Delete expression", None, |rig, _| {
