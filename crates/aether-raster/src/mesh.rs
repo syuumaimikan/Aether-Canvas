@@ -225,6 +225,50 @@ impl PreparedTriangle {
         self.edges.iter().all(|e| e.accepts(px, py))
     }
 
+    /// The columns of row `y` that can hold covered pixel centres, as
+    /// `(x0, x1, inside0, inside1)`: pixels outside `x0..x1` are never
+    /// covered, and pixels inside `inside0..inside1` are certainly covered.
+    ///
+    /// Each edge function is linear along the row. Its coefficients are
+    /// differences of f32 inputs, exact in f64, so where it crosses zero is
+    /// known to far better than a pixel: a pixel two columns clear of every
+    /// crossing, on the inside, evaluates strictly positive, and one more
+    /// than a column outside evaluates negative. Only the pixels in between
+    /// need [`PreparedTriangle::contains`], which keeps the result exactly
+    /// the bounding-box scan's, tie rule included.
+    #[inline]
+    fn row_span(&self, y: i32) -> (i32, i32, i32, i32) {
+        let py = y as f64 + 0.5;
+        let (mut lo, mut hi) = (self.bounds.x as f64, self.bounds.right() as f64);
+        let (mut safe_lo, mut safe_hi) = (lo, hi);
+        for e in &self.edges {
+            // eval(px) = slope·px + offset.
+            let slope = -(e.b.1 - e.a.1) * e.sign;
+            if slope == 0.0 {
+                // Constant along the row: one exact evaluation settles it.
+                if !e.accepts(self.bounds.x as f64 + 0.5, py) {
+                    return (0, 0, 0, 0);
+                }
+                continue;
+            }
+            let offset = ((e.b.0 - e.a.0) * (py - e.a.1) + (e.b.1 - e.a.1) * e.a.0) * e.sign;
+            // Pixel x has its centre at x + 0.5.
+            let cross = -offset / slope - 0.5;
+            if slope > 0.0 {
+                lo = lo.max(cross - 1.0);
+                safe_lo = safe_lo.max(cross + 2.0);
+            } else {
+                hi = hi.min(cross + 2.0);
+                safe_hi = safe_hi.min(cross - 1.0);
+            }
+        }
+        let x0 = (lo.floor() as i32).max(self.bounds.x);
+        let x1 = (hi.ceil() as i32).min(self.bounds.right()).max(x0);
+        let inside0 = (safe_lo.ceil() as i32).clamp(x0, x1);
+        let inside1 = (safe_hi.floor() as i32).clamp(inside0, x1);
+        (x0, x1, inside0, inside1)
+    }
+
     #[inline]
     fn texture_point(&self, px: f64, py: f64) -> (f32, f32) {
         let m = &self.map;
@@ -265,6 +309,7 @@ pub fn draw_textured_mesh(
     let last_row = touched.bottom();
     let opacity = opts.opacity.clamp(0.0, 1.0);
     let untinted = opts.is_untinted();
+    let texels = Texels::new(texture);
     let data = dst.data_mut();
     let rows = &mut data[first_row as usize * stride..last_row as usize * stride];
 
@@ -282,27 +327,155 @@ pub fn draw_textured_mesh(
                 for y in y0..y1 {
                     let py = y as f64 + 0.5;
                     let row = &mut chunk[(y - band_top) as usize * stride..][..stride];
-                    for x in tri.bounds.x..tri.bounds.right() {
+                    let (x0, x1, inside0, inside1) = tri.row_span(y);
+                    for x in x0..x1 {
                         let px = x as f64 + 0.5;
-                        if !tri.contains(px, py) {
+                        if (x < inside0 || x >= inside1) && !tri.contains(px, py) {
                             continue;
                         }
                         let (u, v) = tri.texture_point(px, py);
-                        let texel = match opts.interpolation {
-                            Interpolation::Nearest => texture.sample_nearest(u, v),
-                            Interpolation::Bilinear => texture.sample_bilinear(u, v),
-                        };
-                        if texel.a == 0 {
-                            continue;
-                        }
                         let offset = x as usize * BYTES_PER_PIXEL;
                         let pixel = &mut row[offset..offset + BYTES_PER_PIXEL];
-                        blend_texel(pixel, texel, opts, opacity, untinted);
+                        match opts.interpolation {
+                            Interpolation::Bilinear => {
+                                let texel = texels.bilinear(u, v);
+                                blend_premultiplied(pixel, texel, opts, opacity, untinted);
+                            }
+                            Interpolation::Nearest => {
+                                let texel = texture.sample_nearest(u, v);
+                                if texel.a != 0 {
+                                    blend_texel(pixel, texel, opts, opacity, untinted);
+                                }
+                            }
+                        }
                     }
                 }
             }
         });
     touched
+}
+
+/// Channel values `0..=255` as `0.0..=1.0`, so texels convert without a
+/// division.
+static UNIT: [f32; 256] = {
+    let mut table = [0.0f32; 256];
+    let mut i = 0;
+    while i < 256 {
+        table[i] = i as f32 / 255.0;
+        i += 1;
+    }
+    table
+};
+
+/// `floor` for the sampler's coordinates, without a libm call.
+#[inline]
+fn floor_i32(v: f32) -> i32 {
+    let i = v as i32;
+    if (i as f32) > v {
+        i - 1
+    } else {
+        i
+    }
+}
+
+/// Round a non-negative channel value to a byte.
+#[inline]
+fn to_byte(v: f32) -> u8 {
+    (v + 0.5).clamp(0.0, 255.0) as u8
+}
+
+/// A texture read for the hot loop: bilinear sampling with the same texel
+/// centres as [`Pixmap::sample_bilinear`], but returning premultiplied colour
+/// in `0..=1` straight to the blender instead of rounding to a byte first.
+struct Texels<'a> {
+    data: &'a [u8],
+    width: i32,
+    height: i32,
+    stride: usize,
+}
+
+impl<'a> Texels<'a> {
+    fn new(texture: &'a Pixmap) -> Self {
+        Self {
+            data: texture.data(),
+            width: texture.width() as i32,
+            height: texture.height() as i32,
+            stride: texture.width() as usize * BYTES_PER_PIXEL,
+        }
+    }
+
+    #[inline]
+    fn bilinear(&self, x: f32, y: f32) -> [f32; 4] {
+        let fx = x - 0.5;
+        let fy = y - 0.5;
+        let x0 = floor_i32(fx);
+        let y0 = floor_i32(fy);
+        let tx = fx - x0 as f32;
+        let ty = fy - y0 as f32;
+        let mut acc = [0.0f32; 4];
+        let mut add = |px: i32, py: i32, w: f32| {
+            if w <= 0.0 || px < 0 || py < 0 || px >= self.width || py >= self.height {
+                return;
+            }
+            let o = py as usize * self.stride + px as usize * BYTES_PER_PIXEL;
+            let texel = &self.data[o..o + BYTES_PER_PIXEL];
+            let aw = UNIT[texel[3] as usize] * w;
+            acc[0] += UNIT[texel[0] as usize] * aw;
+            acc[1] += UNIT[texel[1] as usize] * aw;
+            acc[2] += UNIT[texel[2] as usize] * aw;
+            acc[3] += aw;
+        };
+        add(x0, y0, (1.0 - tx) * (1.0 - ty));
+        add(x0 + 1, y0, tx * (1.0 - ty));
+        add(x0, y0 + 1, (1.0 - tx) * ty);
+        add(x0 + 1, y0 + 1, tx * ty);
+        acc
+    }
+}
+
+/// Tint a premultiplied sample and composite it source-over onto one
+/// straight-alpha pixel. The same model as [`blend_texel`].
+#[inline]
+fn blend_premultiplied(
+    pixel: &mut [u8],
+    texel: [f32; 4],
+    opts: &MeshDrawOptions,
+    opacity: f32,
+    untinted: bool,
+) {
+    let alpha = texel[3];
+    // Below half a level the sample would have rounded to transparent.
+    if alpha < 0.5 / 255.0 {
+        return;
+    }
+    let straight = 1.0 / alpha;
+    let mut r = texel[0] * straight;
+    let mut g = texel[1] * straight;
+    let mut b = texel[2] * straight;
+    if !untinted {
+        r *= opts.multiply[0];
+        g *= opts.multiply[1];
+        b *= opts.multiply[2];
+        r = r + opts.screen[0] - r * opts.screen[0];
+        g = g + opts.screen[1] - g * opts.screen[1];
+        b = b + opts.screen[2] - b * opts.screen[2];
+    }
+    let sa = alpha * opacity;
+    if sa <= 0.0 {
+        return;
+    }
+    let da = UNIT[pixel[3] as usize];
+    let out_a = sa + da * (1.0 - sa);
+    if out_a <= 1e-6 {
+        return;
+    }
+    let dst_weight = da * (1.0 - sa);
+    let scale = 255.0 / out_a;
+    let mix = |s: f32, d: u8| to_byte((s * sa + UNIT[d as usize] * dst_weight) * scale);
+    pixel[0] = mix(r, pixel[0]);
+    pixel[1] = mix(g, pixel[1]);
+    pixel[2] = mix(b, pixel[2]);
+    pixel[3] = to_byte(out_a * 255.0);
 }
 
 /// Tint a texel and composite it source-over onto one straight-alpha pixel.
@@ -351,8 +524,9 @@ pub fn mesh_coverage(width: u32, height: u32, positions: &[Vec2], triangles: &[[
     // Coverage does not depend on texture coordinates; reuse positions.
     for tri in prepare(positions, positions, triangles, clip) {
         for y in tri.bounds.y..tri.bounds.bottom() {
-            for x in tri.bounds.x..tri.bounds.right() {
-                if tri.contains(x as f64 + 0.5, y as f64 + 0.5) {
+            let (x0, x1, inside0, inside1) = tri.row_span(y);
+            for x in x0..x1 {
+                if (x >= inside0 && x < inside1) || tri.contains(x as f64 + 0.5, y as f64 + 0.5) {
                     mask.set(x, y, 255);
                 }
             }
@@ -534,5 +708,51 @@ mod tests {
         assert_eq!(mask.get(4, 4), 255);
         assert_eq!(mask.get(0, 0), 0);
         assert_eq!(mask.get(9, 9), 0);
+    }
+
+    #[test]
+    fn row_spans_agree_with_the_exact_test() {
+        // Deterministic pseudo-random triangles: slivers, near-horizontal and
+        // near-vertical edges, sub-pixel and large coordinates.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let clip = IRect::new(-50, -50, 400, 400);
+        for case in 0..4000 {
+            let scale = [3.0, 40.0, 300.0][case % 3];
+            let mut p = [0.0f32; 6];
+            for v in &mut p {
+                *v = (next() * scale) as f32 + 0.25 * (case % 4) as f32;
+            }
+            if case % 5 == 0 {
+                p[3] = p[1] + (next() * 1e-3) as f32; // nearly horizontal edge
+            }
+            if case % 7 == 0 {
+                p[2] = p[0] + (next() * 1e-3) as f32; // nearly vertical edge
+            }
+            let positions = [vec2(p[0], p[1]), vec2(p[2], p[3]), vec2(p[4], p[5])];
+            for tri in prepare(&positions, &positions, &[[0, 1, 2]], clip) {
+                for y in tri.bounds.y..tri.bounds.bottom() {
+                    let (x0, x1, inside0, inside1) = tri.row_span(y);
+                    assert!(x0 <= inside0 && inside0 <= inside1 && inside1 <= x1);
+                    for x in tri.bounds.x..tri.bounds.right() {
+                        let covered = tri.contains(x as f64 + 0.5, y as f64 + 0.5);
+                        if covered {
+                            assert!(
+                                x >= x0 && x < x1,
+                                "case {case}: pixel ({x}, {y}) outside span {x0}..{x1}"
+                            );
+                        }
+                        if x >= inside0 && x < inside1 {
+                            assert!(covered, "case {case}: pixel ({x}, {y}) in the sure part {inside0}..{inside1} is not covered");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

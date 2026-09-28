@@ -40,6 +40,7 @@ dependencies = [
  "aether-ui",
  "eframe",
  "egui",
+ "rayon",
  "serde_json",
  "tempfile",
  "tracing",
