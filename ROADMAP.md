@@ -101,6 +101,8 @@ arrives with the FFmpeg pipeline of Phase 8.
   standard parameters, and webcam tracking in the web player
 - Live2D interchange: motions (`.motion3.json`) and expressions
   (`.exp3.json`), both ways
+- A wgpu renderer for players, and a GPU pose preview in the editor whenever
+  it is exact
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group

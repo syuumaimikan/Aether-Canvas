@@ -11,6 +11,7 @@ pub mod app;
 pub mod canvas;
 pub mod dock;
 pub mod fonts;
+pub mod gpu_preview;
 pub mod i18n;
 pub mod icons;
 pub mod panels;

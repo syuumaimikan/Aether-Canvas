@@ -1,0 +1,22 @@
+[package]
+name = "aether-player-wgpu"
+description = "Draws Aether Canvas runtime models with wgpu: the editor's GPU preview, and the way into wgpu-based engines."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+aether-player.workspace = true
+aether-raster.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+aether-core.workspace = true
+aether-document.workspace = true
+aether-io.workspace = true
+aether-render.workspace = true
+pollster.workspace = true

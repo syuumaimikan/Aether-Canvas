@@ -265,6 +265,27 @@ impl Player {
         }
     }
 
+    /// Take over an edited copy of this model's rig, pose and simulation
+    /// output included, and redraw with it — how an editor previews its
+    /// rig live. Returns false, changing nothing, when the rig no longer
+    /// fits the model's parts (a mesh added, removed or re-meshed); build a
+    /// new model then.
+    pub fn sync_rig(&mut self, rig: &aether_rig::Rig) -> bool {
+        let fits = self.model.parts.iter().all(|part| {
+            match (self.model.rig.mesh(part.layer), rig.mesh(part.layer)) {
+                (Some(_), Some(mesh)) => mesh.vertices.len() == part.vertices.len(),
+                (None, None) => true,
+                _ => false,
+            }
+        });
+        if !fits {
+            return false;
+        }
+        self.model.rig = rig.clone();
+        self.update();
+        true
+    }
+
     // ---- face tracking ----------------------------------------------------
 
     /// Feed one face-tracker sample (see [`crate::tracking`] for the

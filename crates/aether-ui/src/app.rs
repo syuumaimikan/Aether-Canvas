@@ -74,6 +74,11 @@ impl AetherApp {
         app.apply_theme(&cc.egui_ctx);
         // Japanese (and other CJK) UI text needs a system font.
         crate::fonts::install_cjk_fallback(&cc.egui_ctx);
+        // Rig poses draw on the GPU when the document allows it exactly.
+        if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+            app.canvas
+                .set_gpu_preview(crate::gpu_preview::GpuPreview::from_render_state(render_state));
+        }
         if let Some(path) = path {
             app.open_path(path);
         }

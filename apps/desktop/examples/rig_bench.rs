@@ -95,5 +95,55 @@ fn main() -> aether_core::Result<()> {
     println!("  composite, posed            {composite:7.2} ms");
     println!("    of which mesh drawing     {meshes:7.2} ms");
     println!("  rig evaluation              {evaluate:7.2} ms");
+    match gpu_frame(&posed) {
+        Some((adapter, ms)) => println!("  GPU pose preview            {ms:7.2} ms  ({adapter})"),
+        None => println!("  GPU pose preview            (no wgpu adapter)"),
+    }
     Ok(())
+}
+
+/// Time the editor's GPU pose preview: take the rig's pose, draw, and wait
+/// for the GPU to finish.
+fn gpu_frame(doc: &aether_document::Document) -> Option<(String, f64)> {
+    use aether_player_wgpu::{GpuPlayer, View};
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    let name = adapter.get_info().name;
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+    let export = aether_io::runtime_model::export_model(doc, &Default::default());
+    let mut player = aether_player::Player::new(export.model).ok()?;
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut gpu = GpuPlayer::new(&device, &queue, format, player.model(), &export.textures);
+    let size = (doc.width, doc.height);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let ms = per_frame(|| {
+        player.sync_rig(&doc.rig);
+        gpu.render(
+            &device,
+            &queue,
+            &player,
+            &view,
+            size,
+            View::IDENTITY,
+            Some([0.0; 4]),
+        );
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    });
+    Some((name, ms))
 }

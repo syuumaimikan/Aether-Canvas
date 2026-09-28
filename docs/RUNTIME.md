@@ -10,6 +10,7 @@ ships **one runtime, `aether-player`**, that plays it everywhere:
 | JavaScript without a DOM | `AetherRuntime` / `AetherModel` from the same file | Tested in Node |
 | C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes, Godot GDExtension…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
 | Rust | The `aether-player` crate | Tested |
+| Rust engines on wgpu (Bevy and others), any Vulkan/Metal/DX12/GL/WebGPU app | `aether-player-wgpu`: `GpuPlayer::prepare` + `paint` into your render pass, or `render` into a texture | Checked against the software renderer on Mesa's Vulkan driver |
 | Servers, thumbnails, CI | `aether_player::cpu`, a software renderer | The reference the others are checked against |
 
 The player runs **the same rig code as the editor** — keyforms, deformers,

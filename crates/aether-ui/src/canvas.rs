@@ -27,6 +27,8 @@ const PIXEL_GRID_MIN_ZOOM: f32 = 6.0;
 #[derive(Default)]
 pub struct CanvasView {
     composite: Option<TextureHandle>,
+    /// Draws rig poses on the GPU when it can stand in for the composite.
+    gpu: Option<crate::gpu_preview::GpuPreview>,
     checker: Option<TextureHandle>,
     selection: Option<TextureHandle>,
     selection_revision: Option<u64>,
@@ -45,6 +47,11 @@ impl CanvasView {
         Self::default()
     }
 
+    /// Draw poses on the GPU through `preview` whenever it is exact.
+    pub fn set_gpu_preview(&mut self, preview: crate::gpu_preview::GpuPreview) {
+        self.gpu = Some(preview);
+    }
+
     /// Draw the canvas and handle its input.
     pub fn ui(&mut self, ui: &mut Ui, state: &mut EditorState) {
         let size = ui.available_size();
@@ -59,8 +66,13 @@ impl CanvasView {
         painter.rect_filled(rect, 0.0, state.theme.canvas_backdrop());
 
         self.sync_composite(ui, state);
+        let preview = self.gpu.as_mut().and_then(|gpu| gpu.refresh(state));
+        state.rig.gpu_preview = preview.is_some();
         self.draw_checkerboard(&painter, rect, state);
-        self.draw_composite(&painter, rect, state);
+        match preview {
+            Some(texture) => self.draw_texture(&painter, rect, state, texture),
+            None => self.draw_composite(&painter, rect, state),
+        }
         self.draw_selection(ui, &painter, rect, state);
         self.draw_canvas_border(&painter, rect, state);
         self.draw_pixel_grid(&painter, rect, state);
@@ -188,9 +200,19 @@ impl CanvasView {
     }
 
     fn draw_composite(&self, painter: &egui::Painter, rect: Rect, state: &EditorState) {
-        let Some(texture) = &self.composite else {
-            return;
-        };
+        if let Some(texture) = &self.composite {
+            self.draw_texture(painter, rect, state, texture.id());
+        }
+    }
+
+    /// Draw a document-sized texture through the viewport.
+    fn draw_texture(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        state: &EditorState,
+        texture: egui::TextureId,
+    ) {
         let quad = self.canvas_quad(rect, state);
         let uv = [
             Pos2::new(0.0, 0.0),
@@ -198,7 +220,7 @@ impl CanvasView {
             Pos2::new(1.0, 1.0),
             Pos2::new(0.0, 1.0),
         ];
-        painter.add(quad_mesh(texture.id(), quad, uv, Color32::WHITE));
+        painter.add(quad_mesh(texture, quad, uv, Color32::WHITE));
     }
 
     /// Tint the selected region, rebuilding the overlay only when it changes.

@@ -325,7 +325,8 @@ of where each stands.
 | Pipeline | **PSD → rigged, playable model in one command** (`--auto-rig --export-model`), no window needed | Exported from the editor |
 | File format | **Open**: project and runtime model are documented JSON + PNG | Proprietary binary runtime format |
 | Runtime | **One open-source runtime running the editor's own rig code**: WebAssembly + WebGL 1/2 for the web (≈190 KB gzipped, ~0.8 ms per frame for the demo character), a C ABI for native hosts, a Rust crate, a software renderer. Every rig feature above plays back (bones and IK, drivers, jiggle, glue, physics, motions, behaviours), parity-tested against the editor; effects and masks are baked into textures and blend modes map to normal, multiply, screen and add | **Mature official SDKs** for Unity, native C++, web and Java |
-| Engine integration | Any engine through the C ABI; no ready-made Unity or Godot package yet | **Official engine packages** |
+| Engine integration | Any engine through the C ABI; a wgpu renderer for Rust engines; no ready-made Unity or Godot package yet | **Official engine packages** |
+| Editor preview | Poses and playback drawn on the GPU whenever that is exact (checked against the CPU compositor); the full compositor otherwise | GPU |
 | Live2D files | **Imports and exports Live2D motions and expressions**, so Aether's timeline can animate existing Live2D models | — |
 | Face tracking | **Built into the runtime**: webcam tracking in the web player (MediaPipe, on the device), and one API for any ARKit/MediaPipe-style tracker, mapped identically on every platform | Through third-party apps (VTube Studio and others) |
 | Ecosystem | New | **Large**: tracking apps, tutorials, marketplaces |

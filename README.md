@@ -94,8 +94,11 @@ project, one document model and one timeline.
   mouth follow your face (MediaPipe, running on the device), mirrored like a
   reflection; any ARKit/MediaPipe-style tracker drives a model through the
   same API on every platform
-- A C ABI with a header for native engines and apps, a Rust crate, and a
+- A C ABI with a header for native engines and apps, a Rust crate, a wgpu
+  renderer (Vulkan, Metal, DirectX 12, OpenGL, WebGPU) for Rust engines, and a
   software renderer for servers and tests
+- The editor previews poses with that GPU renderer whenever the result is
+  exact, so posing and playback skip CPU compositing
 - Parity-tested: WebGL in headless Chromium and the software renderer
   against the editor's compositor, WebAssembly against native, and a C
   program against the header
@@ -188,6 +191,8 @@ crates/
                     animation and runtime-model export
   aether-player/    the runtime: model format, player, C ABI (also the
                     WebAssembly interface), software renderer
+  aether-player-wgpu/ GPU renderer for players: the editor's pose preview and
+                    the way into wgpu-based engines
   aether-ui/        panels, tools, docking layout, application shell
 apps/desktop/       the binary, plus end-to-end tests and examples
 runtime/web/        the JavaScript/WebGL player, demo page and browser tests

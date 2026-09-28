@@ -133,6 +133,9 @@ pub struct RigEditor {
     pub follow_pointer: bool,
     /// Show rigged layers at rest (the mesh tool edits rest positions).
     pub rest_view: bool,
+    /// Set while the canvas shows the GPU pose preview: poses then cost no
+    /// CPU compositing, and the composite catches up when the preview ends.
+    pub gpu_preview: bool,
     /// Draw the selected mesh's wireframe.
     pub show_mesh: bool,
     /// Draw deformer lattices and pivots.
@@ -174,6 +177,7 @@ impl Default for RigEditor {
             auto_key: true,
             follow_pointer: false,
             rest_view: false,
+            gpu_preview: false,
             show_mesh: true,
             show_deformers: true,
             show_bones: true,
@@ -278,6 +282,12 @@ impl EditorState {
             if self.rig.last_pose.take().is_some() {
                 self.doc.mark_all_dirty();
             }
+            return live && (self.rig.simulate || self.rig.playing);
+        }
+        if self.rig.gpu_preview {
+            // The GPU preview draws poses. Forgetting the last pose makes the
+            // first CPU frame afterwards redraw everything.
+            self.rig.last_pose = None;
             return live && (self.rig.simulate || self.rig.playing);
         }
         let pose = self.doc.rig.evaluate();
