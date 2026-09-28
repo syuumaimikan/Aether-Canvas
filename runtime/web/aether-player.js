@@ -57,6 +57,12 @@ export class AetherRuntime {
     }
     // Scratch space for out-parameters (string lengths, parameter ranges).
     this.scratch = this.exports.aether_alloc(16);
+    /** Blend shape names, in the order face samples carry them. */
+    this.blendshapes = Array.from({ length: this.exports.aether_blendshape_count() }, (_, i) =>
+      this.readString(this.exports.aether_blendshape_name(i, this.scratch)),
+    );
+    this.blendshapeIndex = new Map(this.blendshapes.map((name, i) => [name, i]));
+    this.shapeBuffer = this.exports.aether_alloc(this.blendshapes.length * 4);
   }
 
   /** Load a model from the text of model.json. */
@@ -184,6 +190,65 @@ export class AetherModel {
   /** Voice loudness 0..1 and brightness -1..1, for lip sync. */
   setAudio(level, brightness = 0) {
     this.runtime.exports.aether_player_set_audio(this.handle, level, brightness);
+  }
+
+  /**
+   * Feed one face-tracker sample. Angles are degrees in the tracked person's
+   * frame: yaw toward their left, pitch up, roll toward their left shoulder.
+   * `shapes` is MediaPipe's category list ([{ categoryName, score }]), an
+   * object of { name: weight }, or numbers in `runtime.blendshapes` order.
+   * Auto-blink pauses while tracking.
+   */
+  trackFace({ yaw = 0, pitch = 0, roll = 0, shapes } = {}) {
+    const runtime = this.runtime;
+    const count = runtime.blendshapes.length;
+    const weights = runtime.f32(runtime.shapeBuffer, count);
+    weights.fill(0);
+    if (Array.isArray(shapes) && shapes.length && typeof shapes[0] === 'object') {
+      for (const c of shapes) {
+        const i = runtime.blendshapeIndex.get(c.categoryName);
+        if (i !== undefined) weights[i] = c.score;
+      }
+    } else if (shapes && typeof shapes.length === 'number') {
+      for (let i = 0; i < Math.min(count, shapes.length); i++) weights[i] = shapes[i];
+    } else if (shapes) {
+      for (const [name, weight] of Object.entries(shapes)) {
+        const i = runtime.blendshapeIndex.get(name);
+        if (i !== undefined) weights[i] = weight;
+      }
+    }
+    runtime.exports.aether_player_track_face(this.handle, yaw, pitch, roll, runtime.shapeBuffer, count);
+  }
+
+  /** Make the latest tracked face the neutral one. */
+  calibrateTracking() {
+    this.runtime.exports.aether_player_track_calibrate(this.handle);
+  }
+
+  /** Stop following the tracker; tracked parameters return to their defaults. */
+  stopTracking() {
+    this.runtime.exports.aether_player_track_stop(this.handle);
+  }
+
+  get tracking() {
+    return this.runtime.exports.aether_player_is_tracking(this.handle) === 1;
+  }
+
+  /**
+   * Tracking options. `mirror` (default true) moves the model like a mirror
+   * image; `smoothing` is a time constant in seconds; the gains scale head
+   * turns, body follow and mouth opening. Omitted options keep their value.
+   */
+  setTrackingOptions({ mirror, smoothing = NaN, headGain = NaN, bodyFollow = NaN, mouthGain = NaN } = {}) {
+    if (mirror !== undefined) this.trackingMirror = mirror;
+    this.runtime.exports.aether_player_track_settings(
+      this.handle,
+      (this.trackingMirror ?? true) ? 1 : 0,
+      smoothing,
+      headGain,
+      bodyFollow,
+      mouthGain,
+    );
   }
 
   /** Switch a stage ('motions', 'behaviours', 'drivers', 'physics', 'jiggle') on or off. */

@@ -305,6 +305,7 @@ of where each stands.
 | File format | **Open**: project and runtime model are documented JSON + PNG | Proprietary binary runtime format |
 | Runtime | **One open-source runtime running the editor's own rig code**: WebAssembly + WebGL 1/2 for the web (≈190 KB gzipped, ~0.8 ms per frame for the demo character), a C ABI for native hosts, a Rust crate, a software renderer. Every rig feature above plays back (bones and IK, drivers, jiggle, glue, physics, motions, behaviours), parity-tested against the editor; effects and masks are baked into textures and blend modes map to normal, multiply, screen and add | **Mature official SDKs** for Unity, native C++, web and Java |
 | Engine integration | Any engine through the C ABI; no ready-made Unity or Godot package yet | **Official engine packages** |
+| Face tracking | **Built into the runtime**: webcam tracking in the web player (MediaPipe, on the device), and one API for any ARKit/MediaPipe-style tracker, mapped identically on every platform | Through third-party apps (VTube Studio and others) |
 | Ecosystem | New | **Large**: tracking apps, tutorials, marketplaces |
 | Price | **Free and open source** (MIT / Apache-2.0) | Free tier with limits; paid Pro licence |
 
@@ -327,4 +328,5 @@ Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギ�
 * Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。
 * **ランタイム**：「ファイル ▸ ランタイムモデルを書き出し…」で model.json とテクスチャアトラスを出力し、Web（WebAssembly + WebGL、gzip 約 190 KB）、C ABI 経由のネイティブ環境、Rust で再生できます。エディタと同じリグのコードが動くため、見た目も動きもエディタと一致します（自動テストで検証済み）。PSD からは `aether-canvas --auto-rig --export-model 出力先 character.psd` の 1 コマンドで、リグ付きの再生可能なモデルになります。
+* **フェイストラッキング**：Web プレイヤーにウェブカメラでの顔トラッキングを内蔵しています（MediaPipe をブラウザ内で実行し、映像は外部に送信しません）。首の向き・傾き、まばたき、視線、眉、口の開閉と笑顔がモデルに反映され、既定では鏡像として動きます。ARKit など他のトラッカーも同じ API で使えます。
 * 一方、Unity などのゲームエンジン向けの既製パッケージや、トラッキングアプリ・チュートリアル・モデル販売などのエコシステムでは Live2D が先行しています。

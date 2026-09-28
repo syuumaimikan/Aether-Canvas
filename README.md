@@ -86,6 +86,10 @@ project, one document model and one timeline.
 - Web player: WebAssembly (≈190 KB gzipped) + WebGL 1/2, a drop-in
   `<canvas>` component with pointer following, tap events and microphone lip
   sync; about 0.8 ms per frame for the demo character
+- **Webcam face tracking** built in: head, eyes, blinks, gaze, brows and
+  mouth follow your face (MediaPipe, running on the device), mirrored like a
+  reflection; any ARKit/MediaPipe-style tracker drives a model through the
+  same API on every platform
 - A C ABI with a header for native engines and apps, a Rust crate, and a
   software renderer for servers and tests
 - Parity-tested: WebGL in headless Chromium and the software renderer
@@ -93,6 +97,11 @@ project, one document model and one timeline.
   program against the header
 
 ![The web player](docs/images/web-player.png)
+
+![Face tracking in the web player](docs/images/face-tracking.png)
+
+*Face tracking in the web player, fed by a fake camera in headless Chromium.
+Photo: NASA, public domain.*
 
 **Canvas**
 - GPU-accelerated view (wgpu) with pan, zoom, rotation, mirror and a pixel grid

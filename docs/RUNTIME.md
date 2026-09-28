@@ -134,6 +134,33 @@ Inputs:
 * **Hit testing** — `hit_test(x, y)` returns the topmost visible part under
   a document point, for tap reactions.
 
+### Face tracking
+
+Any face tracker that reports head angles and the 52 standard blend shapes
+(ARKit on iPhones, MediaPipe in browsers, most VTuber tracking apps) drives
+a model through one call:
+
+```rust
+use aether_player::FaceFrame;
+let mut face = FaceFrame { yaw, pitch, roll, ..Default::default() };
+face.set_shape("jawOpen", 0.4);
+face.set_shape("eyeBlinkLeft", 0.9);
+player.track_face(&face);      // every tracker frame
+player.calibrate_tracking();   // "this is my neutral face"
+player.tick(dt);               // smoothing happens here
+```
+
+Frames use the tracked person's frame of reference, as trackers report
+them: yaw toward their left, pitch up, roll toward their left shoulder, and
+`…Left` shapes belong to their left side. The player maps them onto the
+standard parameters (`AngleX/Y/Z`, `EyeBallX/Y`, `EyeL/ROpen`, `EyeL/RSmile`,
+`BrowL/RY`, `MouthOpenY`, `MouthForm`, and the body following the head
+unless a driver already does), smoothed, measured against the calibrated
+neutral face, and mirrored by default so the model moves like the person's
+reflection. Auto-blink pauses while the eyes are tracked. The web player's
+`aether-tracking.js` does all of this from a webcam with MediaPipe; the C API
+has `aether_player_track_face` and friends.
+
 ### Drawing rules
 
 Textures are straight-alpha PNGs. Premultiply on upload and blend
@@ -219,6 +246,11 @@ player.start();
   pixels on degenerate slivers, where GPUs snap vertices to 1/256 px).
 * An end-to-end test turns a PSD into a model with the real
   `aether-canvas --auto-rig --export-model` binary and plays it.
+* Face tracking is checked where it shows: on an auto-rigged face, turning,
+  tipping, winking and calibrating move the drawn parts the right way on
+  screen, mirrored and not; and in headless Chromium, MediaPipe tracks a real
+  photo of a face turned ±20° on screen and the model tilts to match (roll
+  measured within a degree of the turn).
 * `cargo test` compiles `runtime/c/play.c` against the header with
   `-Wall -Wextra -Werror`, links it to the shared library and checks what it
   prints, so the header, the exported symbols and the struct layout cannot

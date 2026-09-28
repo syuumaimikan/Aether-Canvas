@@ -96,6 +96,8 @@ arrives with the FFmpeg pipeline of Phase 8.
   from the editor or headlessly (`--auto-rig --export-model`); `aether-player`
   running the editor's rig code, with a C ABI, a WebAssembly + WebGL web
   player and a software renderer, all parity-tested against the editor
+- Face tracking: one mapping from ARKit/MediaPipe-style trackers onto the
+  standard parameters, and webcam tracking in the web player
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group

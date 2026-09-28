@@ -8,3 +8,4 @@ Cargo.lock.bak
 /runtime/web/aether_player.wasm
 /runtime/web/model/
 /runtime/web/test/reference/
+/runtime/web/test/tracking-assets/
