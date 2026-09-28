@@ -1,0 +1,10 @@
+{
+  "name": "com.aethercanvas.player",
+  "version": "0.1.0",
+  "displayName": "Aether Canvas Player",
+  "description": "Plays characters rigged in Aether Canvas: the editor's own rig code (keyforms, deformers, bones and IK, physics, drivers, motions, expressions, look-at, lip sync, face tracking) through a native library, drawn with clipping and every blend mode into a render texture that works with any render pipeline.",
+  "unity": "2021.3",
+  "keywords": ["2d", "animation", "rigging", "live2d", "vtuber", "character"],
+  "license": "MIT OR Apache-2.0",
+  "author": { "name": "Aether Canvas contributors" }
+}

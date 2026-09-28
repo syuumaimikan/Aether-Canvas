@@ -98,6 +98,9 @@ project, one document model and one timeline.
   rig feature, clipping and all four blend modes, from GDScript; drawn the
   same by all three Godot renderers (tested in Godot against the software
   renderer)
+- A Unity package: the `AetherModel` component and a C# API (the binding is
+  tested with .NET against the native library; the scripts compile against
+  Unity's assemblies)
 - A C ABI with a header for native engines and apps, a Rust crate, a wgpu
   renderer (Vulkan, Metal, DirectX 12, OpenGL, WebGPU) for Rust engines, and a
   software renderer for servers and tests
@@ -209,6 +212,7 @@ crates/
 apps/desktop/       the binary, plus end-to-end tests and examples
 runtime/web/        the JavaScript/WebGL player, demo page and browser tests
 runtime/godot/      the Godot 4 extension (AetherModel2D), demo and tests
+runtime/unity/      the Unity package (AetherModel, C# API) and its tests
 runtime/c/          a C example, compiled and run by the test suite
 docs/               architecture notes and the file-format specification
 ```
