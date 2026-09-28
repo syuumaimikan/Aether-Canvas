@@ -64,9 +64,31 @@ impl CanvasView {
         self.draw_selection(ui, &painter, rect, state);
         self.draw_canvas_border(&painter, rect, state);
         self.draw_pixel_grid(&painter, rect, state);
+        draw_rig_overlay(ui, &painter, rect, state);
 
         self.handle_input(ui, &response, rect, state);
+        self.update_look_target(ui, rect, state);
         self.draw_cursor(ui, &painter, rect, state);
+    }
+
+    /// Feed the pointer position to look-at while "follow pointer" is on.
+    fn update_look_target(&self, ui: &Ui, rect: Rect, state: &mut EditorState) {
+        if !state.rig.follow_pointer {
+            state.rig.runtime.inputs.look = None;
+            return;
+        }
+        let Some(pos) = ui.ctx().pointer_latest_pos() else {
+            return;
+        };
+        let doc = state
+            .viewport
+            .screen_to_doc(DocVec::new(pos.x - rect.min.x, pos.y - rect.min.y));
+        let half = DocVec::new(state.doc.width as f32 * 0.5, state.doc.height as f32 * 0.5);
+        let look = DocVec::new(
+            ((doc.x - half.x) / half.x).clamp(-1.0, 1.0),
+            (-(doc.y - half.y * 0.8) / half.y).clamp(-1.0, 1.0),
+        );
+        state.rig.runtime.inputs.look = Some(look);
     }
 
     /// Upload the parts of the composite that changed since the last frame.
@@ -329,6 +351,31 @@ impl CanvasView {
                     let screen: Vec<Pos2> = points.iter().map(|p| to_screen(rect, state, *p)).collect();
                     painter.add(Shape::closed_line(screen, stroke));
                 }
+                ToolPreview::Line(a, b) => {
+                    draw_bone_shape(
+                        painter,
+                        to_screen(rect, state, a),
+                        to_screen(rect, state, b),
+                        Color32::from_rgba_unmultiplied(250, 220, 150, 160),
+                        true,
+                    );
+                }
+            }
+        }
+
+        // The deform brush.
+        if state.tools.active_id() == ToolId::Deform {
+            if let Some(pos) = ui.ctx().pointer_latest_pos() {
+                if rect.contains(pos) {
+                    let radius = state.rig.tool.radius * state.viewport.zoom;
+                    if radius > 2.0 && radius < 4000.0 {
+                        painter.circle_stroke(
+                            pos,
+                            radius,
+                            Stroke::new(1.0, Color32::from_rgb(250, 200, 110)),
+                        );
+                    }
+                }
             }
         }
 
@@ -474,12 +521,14 @@ impl CanvasView {
 /// Build a textured quad.
 fn quad_mesh(texture: egui::TextureId, corners: [Pos2; 4], uv: [Pos2; 4], tint: Color32) -> Shape {
     let mut mesh = Mesh::with_texture(texture);
+    // Push textured vertices directly: `Mesh::colored_vertex` is for
+    // untextured meshes and debug-asserts on a textured one.
     for (pos, uv) in corners.iter().zip(uv.iter()) {
-        mesh.colored_vertex(*pos, tint);
-        // `colored_vertex` does not take a uv, so patch the last vertex.
-        if let Some(vertex) = mesh.vertices.last_mut() {
-            vertex.uv = *uv;
-        }
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: *pos,
+            uv: *uv,
+            color: tint,
+        });
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
@@ -507,4 +556,145 @@ fn doc_rect_points(rect: Rect, state: &EditorState, r: aether_core::math::IRect)
         Pos2::new(rect.min.x + s.x, rect.min.y + s.y)
     })
     .collect()
+}
+
+/// Draw a bone as a tapered diamond from `head` to `tail`.
+fn draw_bone_shape(painter: &egui::Painter, head: Pos2, tail: Pos2, color: Color32, selected: bool) {
+    let dir = tail - head;
+    let length = dir.length();
+    if length < 1.0 {
+        return;
+    }
+    let n = Vec2::new(-dir.y, dir.x) / length * (length * 0.1).clamp(3.0, 12.0);
+    let joint = head + dir * 0.2;
+    let outline = Stroke::new(if selected { 2.0 } else { 1.0 }, Color32::from_black_alpha(160));
+    painter.add(Shape::convex_polygon(
+        vec![head, joint + n, tail, joint - n],
+        color,
+        outline,
+    ));
+    painter.circle_stroke(head, 3.5, Stroke::new(1.0, Color32::WHITE));
+}
+
+/// Meshes, deformers and bones over the artwork.
+fn draw_rig_overlay(ui: &Ui, painter: &egui::Painter, rect: Rect, state: &EditorState) {
+    use aether_document::rig::{DeformerKind, Evaluator, RigNode};
+    let rig = &state.doc.rig;
+    if rig.meshes.is_empty() && rig.deformers.is_empty() && rig.bones.is_empty() {
+        return;
+    }
+    let rig_tool = matches!(
+        state.tools.active_id(),
+        ToolId::Mesh | ToolId::Deform | ToolId::Bone
+    );
+    let rig_space = matches!(
+        state.workspace,
+        crate::state::Workspace::Rigging | crate::state::Workspace::Animation
+    );
+    if !rig_tool && !rig_space {
+        return;
+    }
+    let playing = state.rig.playing;
+    let eval = Evaluator::new(rig);
+    let selection = state.rig.tool.selection;
+    let screen = |p: DocVec| to_screen(rect, state, p);
+    let accent = Color32::from_rgb(255, 196, 90);
+
+    // Mesh wireframe: the selection, or the active layer under the mesh tool.
+    let mesh_layer = match selection {
+        Some(RigNode::Mesh(layer)) => Some(layer),
+        _ if state.tools.active_id() == ToolId::Mesh => Some(state.doc.active_layer),
+        _ => None,
+    };
+    if state.rig.show_mesh && !playing {
+        if let Some(mesh) = mesh_layer.and_then(|l| rig.mesh(l)) {
+            let positions = if state.rig.rest_view {
+                mesh.vertices.clone()
+            } else {
+                eval.mesh_pose(mesh).positions
+            };
+            let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(140, 200, 255, 150));
+            for (a, b) in mesh.edges() {
+                if let (Some(pa), Some(pb)) = (positions.get(a as usize), positions.get(b as usize)) {
+                    painter.line_segment([screen(*pa), screen(*pb)], stroke);
+                }
+            }
+            let dot = if state.tools.active_id() == ToolId::Mesh {
+                3.0
+            } else {
+                1.8
+            };
+            for p in &positions {
+                painter.circle_filled(screen(*p), dot, Color32::from_rgb(220, 240, 255));
+            }
+        }
+    }
+
+    // Deformers.
+    if state.rig.show_deformers && !playing {
+        for d in &rig.deformers {
+            let chosen = selection == Some(RigNode::Deformer(d.id));
+            if !chosen && !rig_space {
+                continue;
+            }
+            let alpha = if chosen { 230 } else { 70 };
+            let handles = eval.deformer_handles(d.id);
+            match &d.kind {
+                DeformerKind::Warp(w) => {
+                    let cols = w.cols + 1;
+                    let color = Color32::from_rgba_unmultiplied(120, 230, 170, alpha);
+                    let node = |i: usize, j: usize| handles.get(j * cols + i).copied();
+                    for j in 0..=w.rows {
+                        for i in 0..=w.cols {
+                            let Some(p) = node(i, j) else { continue };
+                            if let Some(q) = (i < w.cols).then(|| node(i + 1, j)).flatten() {
+                                painter.line_segment([screen(p), screen(q)], Stroke::new(1.0, color));
+                            }
+                            if let Some(q) = (j < w.rows).then(|| node(i, j + 1)).flatten() {
+                                painter.line_segment([screen(p), screen(q)], Stroke::new(1.0, color));
+                            }
+                            if chosen {
+                                painter.circle_filled(screen(p), 3.0, color);
+                            }
+                        }
+                    }
+                }
+                DeformerKind::Rotation(_) => {
+                    if let [pivot, arm] = handles.as_slice() {
+                        let color = Color32::from_rgba_unmultiplied(230, 150, 230, alpha);
+                        painter.line_segment([screen(*pivot), screen(*arm)], Stroke::new(2.0, color));
+                        painter.circle_stroke(screen(*pivot), 7.0, Stroke::new(2.0, color));
+                        painter.circle_filled(screen(*arm), 4.0, color);
+                    }
+                }
+            }
+        }
+    }
+
+    // Bones and IK links.
+    if state.rig.show_bones {
+        let skeleton = eval.skeleton();
+        for bone in &rig.bones {
+            let (Some(head), Some(tail)) = (skeleton.head(bone.id), skeleton.tail(bone.id)) else {
+                continue;
+            };
+            let chosen = selection == Some(RigNode::Bone(bone.id));
+            let color = if chosen {
+                accent
+            } else if bone.deform {
+                Color32::from_rgba_unmultiplied(235, 225, 200, 170)
+            } else {
+                Color32::from_rgba_unmultiplied(150, 200, 250, 150)
+            };
+            draw_bone_shape(painter, screen(head), screen(tail), color, chosen);
+            if let Some(target) = bone.ik.as_ref().and_then(|ik| skeleton.head(ik.target)) {
+                painter.line_segment(
+                    [screen(tail), screen(target)],
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(250, 200, 110, 140)),
+                );
+                painter.circle_stroke(screen(target), 6.0, Stroke::new(1.5, accent));
+            }
+        }
+    }
+    let _ = ui;
 }

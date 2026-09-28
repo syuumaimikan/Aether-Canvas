@@ -10,6 +10,10 @@
 //! * [`brush_io`] – brush presets as plain, shareable JSON.
 //! * [`animation`] – rendering rig motions to PNG sequences, animated GIFs
 //!   and sprite sheets.
+//! * [`psd`] – layered Photoshop documents in and out, the usual hand-off
+//!   format for artwork that is about to be rigged.
+//! * [`runtime_model`] – runtime models (`model.json` + texture atlases) for
+//!   `aether-player` in games, apps and on the web.
 //!
 //! The project format carries a schema version and goes through
 //! [`project::migrate`] on load, so older files keep opening as the format
@@ -19,6 +23,8 @@ pub mod animation;
 pub mod brush_io;
 pub mod image_io;
 pub mod project;
+pub mod psd;
+pub mod runtime_model;
 
 pub use brush_io::{load_presets, save_presets};
 pub use image_io::{export_image, load_image, save_png, ExportSettings, ImageFormat};

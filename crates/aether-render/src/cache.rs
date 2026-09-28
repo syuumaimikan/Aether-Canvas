@@ -18,6 +18,8 @@ pub struct RenderCache {
     /// Region of `image` that changed since [`RenderCache::take_updated`].
     updated: IRect,
     valid: bool,
+    /// Whether rigged layers are drawn posed (false shows the rest pose).
+    deform: bool,
 }
 
 impl Default for RenderCache {
@@ -33,6 +35,7 @@ impl RenderCache {
             image: Pixmap::new(0, 0),
             updated: IRect::EMPTY,
             valid: false,
+            deform: true,
         }
     }
 
@@ -49,6 +52,20 @@ impl RenderCache {
     /// Force a full re-render on the next update.
     pub fn invalidate(&mut self) {
         self.valid = false;
+    }
+
+    /// Draw rigged layers posed (`true`, the default) or at rest. Changing
+    /// the mode re-renders everything on the next update.
+    pub fn set_deform(&mut self, deform: bool) {
+        if self.deform != deform {
+            self.deform = deform;
+            self.valid = false;
+        }
+    }
+
+    /// Whether rigged layers are drawn posed.
+    pub fn deform(&self) -> bool {
+        self.deform
     }
 
     /// Re-composite whatever the document reports as dirty.
@@ -71,11 +88,11 @@ impl RenderCache {
             return IRect::EMPTY;
         }
 
-        compositor.render_into(
-            doc,
-            &mut self.image,
-            &RenderOptions::default().with_region(region),
-        );
+        let options = RenderOptions {
+            deform: self.deform,
+            ..RenderOptions::default()
+        };
+        compositor.render_into(doc, &mut self.image, &options.with_region(region));
         self.valid = true;
         self.updated = self.updated.union(&region);
         region

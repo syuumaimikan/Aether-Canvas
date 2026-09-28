@@ -46,14 +46,20 @@ pub enum Workspace {
     PixelArt,
     /// Compositing and review: history and properties to hand.
     Compositing,
+    /// Rigging: meshes, deformers, bones, parameters and physics.
+    Rigging,
+    /// Animation: the timeline, parameters and live preview.
+    Animation,
 }
 
 impl Workspace {
     /// All workspaces, in menu order.
-    pub const ALL: [Workspace; 3] = [
+    pub const ALL: [Workspace; 5] = [
         Workspace::Illustration,
         Workspace::PixelArt,
         Workspace::Compositing,
+        Workspace::Rigging,
+        Workspace::Animation,
     ];
 
     /// Translation key for the workspace name.
@@ -62,6 +68,8 @@ impl Workspace {
             Workspace::Illustration => "workspace.illustration",
             Workspace::PixelArt => "workspace.pixel_art",
             Workspace::Compositing => "workspace.compositing",
+            Workspace::Rigging => "workspace.rigging",
+            Workspace::Animation => "workspace.animation",
         }
     }
 }
@@ -171,6 +179,8 @@ pub struct EditorState {
     pub shortcuts: ShortcutMap,
     /// Set when the application should close.
     pub quit_requested: bool,
+    /// Rigging and animation state: selection, timeline, live preview.
+    pub rig: crate::rigging::RigEditor,
 }
 
 impl Default for EditorState {
@@ -211,6 +221,7 @@ impl EditorState {
             view_interpolation: Interpolation::Bilinear,
             shortcuts: ShortcutMap::standard(),
             quit_requested: false,
+            rig: crate::rigging::RigEditor::default(),
         }
     }
 
@@ -297,6 +308,7 @@ impl EditorState {
             selection_mode: self.selection_mode,
             composite: &composite,
             status: None,
+            rig: &mut self.rig.tool,
         };
         f(tools.active_mut(), &mut ctx);
         let status = ctx.status.take();
@@ -334,6 +346,9 @@ impl EditorState {
         }
         if self.tools.select(id) {
             self.status = self.tr(id.label_key()).to_string();
+            // Mesh editing happens on the rest pose, where vertex positions
+            // are also texture coordinates.
+            self.rig.rest_view = id == ToolId::Mesh;
         }
     }
 
@@ -354,6 +369,7 @@ impl EditorState {
         self.doc = doc;
         self.history = History::default();
         self.cache.invalidate();
+        self.rig = crate::rigging::RigEditor::default();
         self.path = path;
         let size = self.viewport.size;
         self.viewport = Viewport::fitted(self.doc.width, self.doc.height, size);
@@ -370,6 +386,25 @@ impl EditorState {
         let path = path.as_ref().to_path_buf();
         let doc = project::load_project(&path)?;
         self.set_document(doc, Some(path));
+        Ok(())
+    }
+
+    /// Open a layered Photoshop document: layers, folders, blend modes,
+    /// opacity, clipping and masks come across.
+    pub fn open_psd(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let doc = aether_io::psd::load_psd_file(path.as_ref())?;
+        self.set_document(doc, None);
+        self.status = format!("Imported {} layers", self.doc.layer_count());
+        Ok(())
+    }
+
+    /// Write the document as a layered Photoshop file.
+    pub fn export_psd(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let composite = self.compositor.render(&self.doc);
+        let bytes = aether_io::psd::save_psd(&self.doc, &composite)?;
+        std::fs::write(path, bytes)?;
+        self.status = format!("Exported {}", path.display());
         Ok(())
     }
 
@@ -563,7 +598,27 @@ impl EditorState {
         let parent = self.doc.layers.parent_of(id);
         let index = self.doc.layers.index_of(id).map(|i| i + 1).unwrap_or(0);
         let command = AddLayerCommand::new(copy, parent, index);
-        self.history.execute(&mut self.doc, Box::new(command))?;
+        // A rigged layer's copy gets its own copy of the mesh, keyforms and
+        // all, in the same undo step.
+        match self.doc.rig.mesh(id).cloned() {
+            Some(mut mesh) => {
+                mesh.layer = new_id;
+                mesh.glue.clear();
+                if !mesh.name.is_empty() {
+                    mesh.name = format!("{} copy", mesh.name);
+                }
+                let mut rig = self.doc.rig.clone();
+                rig.set_mesh(mesh);
+                let mut transaction = Transaction::new("Duplicate Layer");
+                transaction.push(Box::new(command));
+                transaction.push(Box::new(aether_document::SetRigCommand::new(
+                    "Duplicate mesh",
+                    rig,
+                )));
+                self.history.execute(&mut self.doc, Box::new(transaction))?;
+            }
+            None => self.history.execute(&mut self.doc, Box::new(command))?,
+        }
         Ok(new_id)
     }
 
@@ -862,6 +917,20 @@ impl EditorState {
                 self.show_pixel_grid = false;
                 self.view_interpolation = Interpolation::Bilinear;
             }
+            Workspace::Rigging => {
+                self.show_pixel_grid = false;
+                self.view_interpolation = Interpolation::Bilinear;
+                self.rig.animate = false;
+                self.rig.playing = false;
+            }
+            Workspace::Animation => {
+                self.show_pixel_grid = false;
+                self.view_interpolation = Interpolation::Bilinear;
+                if self.rig.motion.is_none() && !self.doc.rig.motions.is_empty() {
+                    self.rig.motion = Some(0);
+                }
+                self.rig.animate = self.rig.motion.is_some();
+            }
         }
         self.status = self.tr(workspace.key()).to_string();
     }
@@ -978,6 +1047,39 @@ impl EditorState {
             }
             Action::SwapColors => {
                 std::mem::swap(&mut self.primary, &mut self.secondary);
+                Ok(())
+            }
+            Action::ToolMesh => {
+                self.select_tool(ToolId::Mesh);
+                Ok(())
+            }
+            Action::ToolDeform => {
+                self.select_tool(ToolId::Deform);
+                Ok(())
+            }
+            Action::ToolBone => {
+                self.select_tool(ToolId::Bone);
+                Ok(())
+            }
+            Action::PlayPause => {
+                self.toggle_playback();
+                Ok(())
+            }
+            Action::NextFrame => {
+                self.step_frames(1);
+                Ok(())
+            }
+            Action::PreviousFrame => {
+                self.step_frames(-1);
+                Ok(())
+            }
+            Action::KeyAll => self.key_all_at_playhead(),
+            Action::ToggleSimulation => {
+                self.rig.simulate = !self.rig.simulate;
+                Ok(())
+            }
+            Action::ResetPose => {
+                self.reset_pose();
                 Ok(())
             }
             Action::Save if self.path.is_some() => self.save(),
@@ -1319,6 +1421,19 @@ mod tests {
         let back = aether_io::load_image(&path).expect("read back");
         assert_eq!(back.get(5, 5), Rgba8::new(10, 120, 200, 255));
         assert_eq!((back.width(), back.height()), (64, 64));
+    }
+
+    #[test]
+    fn psd_files_open_and_export_with_their_layers() {
+        let mut state = state();
+        state.add_layer().expect("layer");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("parts.psd");
+        state.export_psd(&path).expect("export");
+        state.new_document(8, 8, "other");
+        state.open_psd(&path).expect("open");
+        assert_eq!(state.doc.layer_count(), 2);
+        assert_eq!(state.doc.name, "parts");
     }
 
     #[test]

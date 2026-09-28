@@ -1,0 +1,21 @@
+[package]
+name = "aether-player"
+description = "Runtime for Aether Canvas rigged models: load, animate and draw them in games, apps and on the web."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+# `rlib` for Rust hosts, `cdylib` for everything else: a shared library with
+# a C ABI on desktop and mobile, and a WebAssembly module on the web.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+aether-core.workspace = true
+aether-raster.workspace = true
+aether-rig.workspace = true
+serde.workspace = true
+serde_json.workspace = true

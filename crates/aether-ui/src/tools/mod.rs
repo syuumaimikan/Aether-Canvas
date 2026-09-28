@@ -6,7 +6,8 @@
 //!
 //! Tools live in submodules: [`stroke`] (brush and eraser), [`paint`]
 //! (bucket and eyedropper), [`select`] (marquee, lasso, wand), [`placement`]
-//! (move and pan), [`transform`] and [`liquify`].
+//! (move and pan), [`transform`], [`liquify`] and [`rig`] (mesh, deform and
+//! bone).
 //!
 //! ## Live strokes without losing undo
 //!
@@ -22,6 +23,7 @@
 pub mod liquify;
 pub mod paint;
 pub mod placement;
+pub mod rig;
 pub mod select;
 pub mod stroke;
 pub mod transform;
@@ -29,10 +31,12 @@ pub mod transform;
 pub use liquify::{LiquifyMode, LiquifyTool};
 pub use paint::{BucketTool, EyedropperTool};
 pub use placement::{MoveTool, PanTool};
+pub use rig::{BoneTool, DeformTool, MeshTool};
 pub use select::{LassoTool, MagicWandTool, MarqueeShape, MarqueeTool};
 pub use stroke::{StrokeMode, StrokeTool};
 pub use transform::{TransformHandle, TransformMode, TransformTool};
 
+use crate::icons;
 use aether_core::color::Rgba;
 use aether_core::input::{InputSample, Modifiers, PointerButton};
 use aether_core::math::{IRect, Vec2};
@@ -70,6 +74,12 @@ pub enum ToolId {
     Liquify,
     /// Pan the view.
     Pan,
+    /// Edit the active layer's mesh.
+    Mesh,
+    /// Shape keyforms of the selected rig object.
+    Deform,
+    /// Draw bones.
+    Bone,
     /// A tool contributed by a plugin.
     Custom(&'static str),
 }
@@ -90,6 +100,9 @@ impl ToolId {
             ToolId::Transform => "tool.transform",
             ToolId::Liquify => "tool.liquify",
             ToolId::Pan => "tool.pan",
+            ToolId::Mesh => "tool.mesh",
+            ToolId::Deform => "tool.deform",
+            ToolId::Bone => "tool.bone",
             ToolId::Custom(name) => name,
         }
     }
@@ -97,19 +110,22 @@ impl ToolId {
     /// Short icon glyph for the toolbar.
     pub fn glyph(self) -> &'static str {
         match self {
-            ToolId::Brush => "✏",
-            ToolId::Eraser => "⌫",
-            ToolId::Bucket => "🪣",
-            ToolId::Eyedropper => "💧",
-            ToolId::RectSelect => "▭",
-            ToolId::EllipseSelect => "◯",
-            ToolId::Lasso => "✎",
-            ToolId::MagicWand => "✨",
-            ToolId::Move => "✥",
-            ToolId::Transform => "⤢",
-            ToolId::Liquify => "🌀",
-            ToolId::Pan => "✋",
-            ToolId::Custom(_) => "＊",
+            ToolId::Brush => icons::BRUSH,
+            ToolId::Eraser => icons::ERASER,
+            ToolId::Bucket => icons::BUCKET,
+            ToolId::Eyedropper => icons::EYEDROPPER,
+            ToolId::RectSelect => icons::RECT_SELECT,
+            ToolId::EllipseSelect => icons::ELLIPSE_SELECT,
+            ToolId::Lasso => icons::LASSO,
+            ToolId::MagicWand => icons::WAND,
+            ToolId::Move => icons::MOVE,
+            ToolId::Transform => icons::TRANSFORM,
+            ToolId::Liquify => icons::LIQUIFY,
+            ToolId::Pan => icons::PAN,
+            ToolId::Mesh => icons::MESH,
+            ToolId::Deform => icons::DEFORM,
+            ToolId::Bone => icons::BONE,
+            ToolId::Custom(_) => icons::PLUGIN,
         }
     }
 }
@@ -153,6 +169,8 @@ pub struct ToolContext<'a> {
     pub composite: &'a Pixmap,
     /// Set by a tool to report something to the status bar.
     pub status: Option<String>,
+    /// Rig selection and rig-tool settings.
+    pub rig: &'a mut crate::rigging::RigToolState,
 }
 
 impl ToolContext<'_> {
@@ -182,6 +200,8 @@ pub enum ToolPreview {
     Ellipse(IRect),
     /// A freehand outline in document space.
     Polyline(Vec<Vec2>),
+    /// A straight segment in document space (a bone being drawn).
+    Line(Vec2, Vec2),
 }
 
 /// Tool settings the user edits in the tool-options panel.
@@ -357,6 +377,9 @@ impl ToolBox {
             Box::new(TransformTool::new()),
             Box::new(LiquifyTool::new()),
             Box::new(PanTool::new()),
+            Box::new(MeshTool::new()),
+            Box::new(DeformTool::new()),
+            Box::new(BoneTool::new()),
         ];
         Self { tools, active: 0 }
     }
@@ -429,6 +452,7 @@ mod tests {
         brush: BrushPreset,
         primary: Rgba,
         composite: Pixmap,
+        rig: crate::rigging::RigToolState,
     }
 
     impl Harness {
@@ -447,6 +471,7 @@ mod tests {
                 },
                 primary: Rgba::rgb(1.0, 0.0, 0.0),
                 composite: Pixmap::new(64, 64),
+                rig: crate::rigging::RigToolState::default(),
             }
         }
 
@@ -463,6 +488,7 @@ mod tests {
                 selection_mode: SelectionMode::Replace,
                 composite: &self.composite,
                 status: None,
+                rig: &mut self.rig,
             }
         }
 

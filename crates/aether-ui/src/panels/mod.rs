@@ -11,14 +11,22 @@
 //! * [`history`] – undo history and document properties
 //! * [`adjust`] – the adjustment and effect parameter editors, including the
 //!   curve widget, shared by adjustment layers, layer effects and filters
+//! * [`parameters`] – rig parameters: posing, keying, drivers
+//! * [`rig_panel`] – the rig hierarchy, inspector and generators
+//! * [`timeline`] – motions, keyframes, lip sync and animation export
+//! * [`dynamics`] – physics, behaviours, drivers and expressions
 
 pub mod adjust;
 pub mod brush;
 pub mod color;
+pub mod dynamics;
 pub mod effects;
 pub mod helpers;
 pub mod history;
 pub mod layers;
+pub mod parameters;
+pub mod rig_panel;
+pub mod timeline;
 pub mod tools;
 
 pub use adjust::{adjustment_editor, curve_editor, effect_editor};
@@ -30,8 +38,12 @@ pub fn effect_name(kind: &aether_raster::effect::EffectKind) -> String {
 pub use brush::brush_panel;
 pub use color::color_panel;
 pub use color::swatch_grid;
+pub use dynamics::dynamics_panel;
 pub use effects::effects_section;
 pub use helpers::{blend_mode_combo, commit_controls, from_color32, to_color32};
 pub use history::{history_panel, properties_panel};
 pub use layers::layers_panel;
+pub use parameters::parameters_panel;
+pub use rig_panel::rig_panel;
+pub use timeline::timeline_panel;
 pub use tools::{tool_options, tools_panel};

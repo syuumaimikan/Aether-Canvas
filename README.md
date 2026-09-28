@@ -4,14 +4,19 @@ An integrated 2D creative environment written in Rust: painting, pixel art,
 vector work, 2D rigging, animation, motion graphics and compositing in one
 project, one document model and one timeline.
 
-> **Status: Phases 0–2 complete.** The application builds, runs, and is usable
-> for real raster work: layers, groups, masks, 23 blend modes, selections, a
-> textured brush engine, non-destructive layer effects and adjustment layers, an
-> interactive transform tool, liquify, filters, full undo/redo, an open project
-> format and image export. The later phases (vector, pixel-art tooling, rigging,
-> animation, VFX) are designed for but not yet implemented — see
-> [ROADMAP.md](ROADMAP.md) for exactly what exists today. Nothing in this
-> repository is a mock: if the UI offers it, it works.
+> **Status: Phases 0–2, 5 and 6 complete.** The application builds, runs, and
+> is usable for real raster work *and* for 2D rigging and animation: layers,
+> groups, masks, 23 blend modes, a textured brush engine, non-destructive
+> effects, transform and liquify — plus a parameter/keyform rig with warp and
+> rotation deformers, bones and IK, physics, expression drivers, a timeline,
+> lip sync, one-click auto-rigging from layer names, PSD import/export,
+> animation export — and a runtime that plays rigged models on the web
+> (WebAssembly + WebGL) and natively (C ABI) exactly as the editor does.
+> Vector, pixel-art tooling and VFX are designed for but not
+> yet implemented — see [ROADMAP.md](ROADMAP.md) for exactly what exists
+> today. Nothing in this repository is a mock: if the UI offers it, it works.
+
+![Rigging workspace](docs/images/rigging-workspace.png)
 
 ## What works today
 
@@ -46,6 +51,49 @@ project, one document model and one timeline.
   warp; Enter applies, Escape abandons, and the whole session is one undo step
 - Liquify brush: push, twirl, pinch, bloat and restore
 
+**Rigging and animation** — see [docs/RIGGING.md](docs/RIGGING.md)
+- Rig the layers you paint: meshes read their pixels live, so repainting a
+  rigged layer needs no re-import
+- **✨ Auto rig**: a complete rig — head/body turns, blinking eyes, looking
+  irises, brows, mouth, blush, hair physics, breathing, an idle motion — built
+  from layer names (English or Japanese) in one undoable step
+- Parameters with N-dimensional keyform grids, linear or smooth (C1)
+  interpolation, cyclic parameters and additive blend shapes
+- Automatic meshing with a coverage guarantee; re-meshing keeps keyforms
+- Warp (bicubic) and rotation deformers, glue, jiggle, per-key opacity,
+  multiply/screen tint and draw order
+- Bones with FK, two-bone and CCD inverse kinematics, and skinning
+- Generators: 3D head turn, sway, close, keyform mirroring, standard physics
+- Frame-rate-independent pendulum physics with wind, colliders and limits
+- Sandboxed expression drivers (`BodyAngleX = self + AngleX * 0.3`)
+- Timeline with step/linear/Bézier/ease/back/elastic/bounce/spring keys,
+  layered motions with crossfades, expressions, auto-blink, breathing,
+  look-at and lip sync baked from WAV
+- Rigged layers keep every blend mode, mask, clipping group and effect
+- Export GIF, PNG sequences and sprite sheets; import and export layered PSD
+- An honest comparison with Live2D Cubism is in
+  [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
+
+**Runtime** — see [docs/RUNTIME.md](docs/RUNTIME.md)
+- Export a runtime model (open JSON + PNG texture atlases) from File ▸
+  *Export runtime model…*, or headlessly:
+  `aether-canvas --auto-rig --export-model out/ character.psd` turns a PSD
+  into a rigged, playable model in one command
+- One runtime, `aether-player`, running the editor's own rig code: every rig
+  feature — bones and IK, drivers, jiggle, physics, motions, expressions,
+  blink, breath, look-at, lip sync, motion events, hit testing — plays back
+  identically
+- Web player: WebAssembly (≈190 KB gzipped) + WebGL 1/2, a drop-in
+  `<canvas>` component with pointer following, tap events and microphone lip
+  sync; about 0.8 ms per frame for the demo character
+- A C ABI with a header for native engines and apps, a Rust crate, and a
+  software renderer for servers and tests
+- Parity-tested: WebGL in headless Chromium and the software renderer
+  against the editor's compositor, WebAssembly against native, and a C
+  program against the header
+
+![The web player](docs/images/web-player.png)
+
 **Canvas**
 - GPU-accelerated view (wgpu) with pan, zoom, rotation, mirror and a pixel grid
 - Tile-based incremental compositing: a brush dab re-composites and re-uploads
@@ -57,13 +105,14 @@ project, one document model and one timeline.
 
 **Files**
 - `.aether` project format: a plain ZIP of JSON + PNG, versioned and migratable
-- Import and export PNG, JPEG, WebP, TIFF, BMP and GIF
+- Import and export PNG, JPEG, WebP, TIFF, BMP and GIF; layered PSD in and out
 
 **UI**
 - Dockable, splittable, tabbed panels (drag them anywhere)
-- Three workspaces (Illustration, Pixel Art, Compositing)
+- Five workspaces (Illustration, Pixel Art, Compositing, Rigging, Animation)
 - Dark, light and high-contrast themes
-- English and Japanese, with no UI strings hard-coded in widget code
+- English and Japanese (a system CJK font is picked up automatically), with
+  no UI strings hard-coded in widget code
 - Fully rebindable keyboard shortcuts with conflict detection
 
 ## Building and running
@@ -92,17 +141,44 @@ cargo run -p aether-desktop --example headless_render -- out.png
 This builds a document in code, paints with the brush engine, composites and
 writes both `out.png` and `out.aether`.
 
+```sh
+cargo run --release -p aether-desktop --example rig_demo -- demo
+cargo run --release -p aether-desktop --example ui_screenshot -- demo/aether-chan.aether rigging shot.png
+```
+
+`rig_demo` paints a character, rigs it by hand *and* with Auto rig, animates
+it with physics and baked lip sync, and writes GIFs, stills, projects and the
+runtime model. `ui_screenshot` renders the editor itself to a PNG in
+software — no GPU or display needed.
+
+### The web player
+
+```sh
+rustup target add wasm32-unknown-unknown
+runtime/web/build.sh --demo            # the WebAssembly module and a demo model
+node runtime/web/test/serve.mjs        # open http://localhost:8080/
+node --test runtime/web/test/*.test.mjs
+```
+
 ## Repository layout
 
 ```text
 crates/
   aether-core/      math, colour, blend modes, ids, errors, input
-  aether-raster/    pixel buffers, tiles, compositing kernels, brush engine
+  aether-raster/    pixel buffers, tiles, compositing kernels, brush engine,
+                    textured triangle meshes
+  aether-rig/       parameters, keyforms, meshes, deformers, bones, physics,
+                    drivers, motions, behaviours, auto-mesh and auto-rig
   aether-document/  layer tree, document model, commands, undo history
   aether-render/    compositor, render cache, viewport maths
-  aether-io/        .aether project container, image import/export
+  aether-io/        .aether project container, image and PSD import/export,
+                    animation and runtime-model export
+  aether-player/    the runtime: model format, player, C ABI (also the
+                    WebAssembly interface), software renderer
   aether-ui/        panels, tools, docking layout, application shell
 apps/desktop/       the binary, plus end-to-end tests and examples
+runtime/web/        the JavaScript/WebGL player, demo page and browser tests
+runtime/c/          a C example, compiled and run by the test suite
 docs/               architecture notes and the file-format specification
 ```
 
@@ -112,6 +188,10 @@ docs/               architecture notes and the file-format specification
 - [ROADMAP.md](ROADMAP.md) — what is built, what is next
 - [CONTRIBUTING.md](CONTRIBUTING.md) — conventions and expectations
 - [docs/FILE_FORMAT.md](docs/FILE_FORMAT.md) — the `.aether` container
+- [docs/RIGGING.md](docs/RIGGING.md) — rigging and animation guide, and the
+  comparison with Live2D Cubism
+- [docs/RUNTIME.md](docs/RUNTIME.md) — exporting and playing models in games,
+  apps and on the web; the model format and the C API
 
 ## Licence
 

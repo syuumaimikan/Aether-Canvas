@@ -61,19 +61,46 @@ implemented.
 - Text engine: variable fonts, kerning, tracking, text on a path, vertical text
 - SVG import and export
 
-## Phase 5 — Animation
+## Phase 5 — Animation ✅ (parameter animation)
 
-- Timeline, keyframes, dope sheet, graph editor
-- Linear, stepped, Bézier, ease and spring interpolation
-- Onion skinning across the timeline
-- Frame and parameter animation sharing one model
+- Timeline with transport, keyframe rows (select, retime, key by
+  double-click), per-key easing and a curve preview
+- Step, linear, cubic Bézier, ease in/out/in-out, back, elastic, bounce and
+  spring interpolation
+- Layered animator with override/additive layers and crossfades; expressions
+- Auto-blink, breathing, look-at and lip sync (live, or baked from WAV)
+- Sandboxed expression drivers
+- Export as GIF, PNG sequence and sprite sheet + JSON atlas, with physics
 
-## Phase 6 — Rigging
+Carried forward: onion skinning and frame-by-frame (raster) animation, which
+arrive with the pixel-art frame model of Phase 3; a draggable Bézier-handle
+graph editor (keys take numeric handles today); video (MP4) export, which
+arrives with the FFmpeg pipeline of Phase 8.
 
-- Bones, forward and inverse kinematics, constraints
-- Mesh deformers with vertex weights, warp and path deformers
-- User-defined parameters driving keyforms (angle, eye open, mouth form, ...)
-- Assisted auto-mesh, auto-weight and symmetry, all hand-editable
+## Phase 6 — Rigging ✅
+
+- User-defined parameters driving N-dimensional keyform grids (linear or
+  smooth), cyclic parameters and additive blend shapes
+- Meshes bound to raster layers: auto-mesh with a coverage guarantee, manual
+  editing, re-meshing that keeps keyforms; opacity, tint and draw-order keys;
+  glue; jiggle
+- Warp (bilinear/bicubic) and rotation deformers, nested; drags mapped
+  through deformed parents
+- Bones, FK, two-bone and CCD inverse kinematics, linear blend skinning,
+  automatic weights
+- Fixed-step pendulum physics with wind, stiffness, angle limits, colliders
+- Generators: 3D head turn, sway, close, keyform mirroring, standard physics
+- One-click auto-rig from English/Japanese layer names
+- Layered PSD import and export
+- Runtime: an open runtime-model format (JSON + texture atlases), exported
+  from the editor or headlessly (`--auto-rig --export-model`); `aether-player`
+  running the editor's rig code, with a C ABI, a WebAssembly + WebGL web
+  player and a software renderer, all parity-tested against the editor
+
+Carried forward: path deformers, weight painting with a brush (weights are
+automatic and per-vertex editable through the data), a formal pose-group
+(part switching) editor, and ready-made engine packages (a Unity package and
+a Godot extension over the C ABI).
 
 ## Phase 7 — Motion graphics
 

@@ -416,3 +416,69 @@ fn a_filter_and_an_effect_produce_the_same_pixels() {
     let live = layered.compositor.render(&layered.doc);
     assert_eq!(baked, live);
 }
+
+#[test]
+fn a_psd_becomes_a_playable_model_in_one_command() {
+    // Artwork as it arrives from a painting app: named layers in a PSD.
+    let mut doc = Document::empty(160, 200, "character");
+    for (name, rect, color) in [
+        (
+            "Face",
+            IRect::new(40, 30, 80, 100),
+            Rgba8::new(250, 220, 200, 255),
+        ),
+        ("Eye L", IRect::new(55, 70, 18, 10), Rgba8::new(40, 60, 160, 255)),
+        ("Eye R", IRect::new(88, 70, 18, 10), Rgba8::new(40, 60, 160, 255)),
+        ("Mouth", IRect::new(68, 105, 24, 6), Rgba8::new(180, 60, 70, 255)),
+        (
+            "Front hair",
+            IRect::new(36, 20, 88, 30),
+            Rgba8::new(90, 60, 150, 255),
+        ),
+    ] {
+        let id = doc.add_raster_layer(name);
+        doc.layers
+            .get_mut(id)
+            .unwrap()
+            .pixmap_mut()
+            .unwrap()
+            .fill_rect(rect, color);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let psd = dir.path().join("character.psd");
+    let composite = aether_render::Compositor::new().render(&doc);
+    std::fs::write(&psd, aether_io::psd::save_psd(&doc, &composite).unwrap()).unwrap();
+
+    let out = dir.path().join("model");
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_aether-canvas"))
+        .args(["--auto-rig", "--export-model"])
+        .arg(&out)
+        .arg(&psd)
+        .output()
+        .expect("run aether-canvas");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("auto rig: 5 parts recognised"), "{stdout}");
+
+    // The model plays: turning the head moves the face.
+    let (model, textures) = aether_io::runtime_model::load_model(&out).unwrap();
+    assert_eq!(model.parts.len(), 5);
+    let mut player = aether_player::Player::new(model).unwrap();
+    let rest = aether_player::cpu::render(&player, &textures);
+    let angle = player.parameter_index("AngleX").expect("auto rig adds AngleX");
+    player.set_parameter(angle, 30.0);
+    player.update();
+    let turned = aether_player::cpu::render(&player, &textures);
+    assert_ne!(rest.data(), turned.data());
+    // Idle motion, blinking and physics run without trouble.
+    if let Some(idle) = player.motion_index("Idle") {
+        player.play_motion(idle, false);
+    }
+    for _ in 0..120 {
+        player.tick(1.0 / 60.0);
+    }
+}

@@ -21,6 +21,7 @@ pub mod document;
 pub mod history;
 pub mod layer;
 pub mod rig_command;
+pub mod rigging;
 pub mod selection;
 pub mod tree;
 

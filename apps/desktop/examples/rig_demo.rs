@@ -11,7 +11,9 @@
 //! 5. add pendulum physics for the hair, drivers, auto-blink and breathing;
 //! 6. key a greeting motion and bake lip sync from a (synthesised) WAV;
 //! 7. render frames with physics running and export a GIF, a PNG contact
-//!    sheet and the `.aether` project.
+//!    sheet and the `.aether` project;
+//! 8. export the runtime model for games and the web player, with reference
+//!    renders from the software player.
 //!
 //! Run with:
 //!
@@ -30,6 +32,8 @@ use aether_document::rig::motion::Easing;
 use aether_document::rig::{ArtMesh, Behaviours, Driver, Motion, NodeRef, RigNode};
 use aether_document::Document;
 use aether_io::animation::{self, AnimationSettings};
+use aether_io::runtime_model;
+use aether_player::{cpu, Player};
 use aether_raster::Pixmap;
 use aether_render::Compositor;
 use std::path::PathBuf;
@@ -72,8 +76,62 @@ fn main() -> aether_core::Result<()> {
     aether_io::save_png(&sheet, &sheet_path)?;
     println!("wrote {}", sheet_path.display());
 
+    // The same artwork rigged automatically, from nothing but its layer
+    // names, and played with its generated Idle motion plus physics.
+    let (mut auto, _) = paint_character();
+    let report = aether_document::rigging::auto_rig_document(&mut auto, 1.2)?;
+    println!(
+        "auto rig: {} parts, {} deformers, {} physics chains, unrecognised {:?}",
+        report.roles.iter().map(|(_, n)| n).sum::<usize>(),
+        report.deformers,
+        report.physics,
+        report.unrecognised
+    );
+    let auto_settings = AnimationSettings {
+        motion: auto.rig.motions.iter().position(|m| m.name == "Idle"),
+        ..settings.clone()
+    };
+    let auto_frames = animation::render_frames(&auto, &compositor, &auto_settings)?;
+    animation::export_gif(
+        &auto_frames,
+        out.join("aether-chan-auto.gif"),
+        auto_settings.fps,
+        background,
+    )?;
+    let mut auto_poses = Vec::new();
+    for values in [
+        vec![],
+        vec![("AngleX", 30.0), ("AngleY", 12.0), ("EyeBallX", 0.8)],
+        vec![
+            ("AngleX", -30.0),
+            ("EyeLOpen", 0.0),
+            ("EyeROpen", 0.0),
+            ("MouthForm", 1.0),
+        ],
+        vec![
+            ("AngleZ", -25.0),
+            ("MouthOpenY", 1.0),
+            ("Cheek", 1.0),
+            ("BrowLY", 1.0),
+            ("BrowRY", 1.0),
+            ("HairSide", 1.0),
+        ],
+    ] {
+        let mut posed = auto.clone();
+        for (param, value) in values {
+            if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
+                posed.rig.set_value(id, value);
+            }
+        }
+        auto_poses.push(animation::flatten(&compositor.render(&posed), background));
+    }
+    let (auto_sheet, _) = animation::pack_sprite_sheet(&auto_poses, Some(4))?;
+    aether_io::save_png(&auto_sheet, out.join("aether-chan-auto-poses.png"))?;
+    aether_io::save_project(&auto, out.join("aether-chan-auto.aether"))?;
+    println!("wrote the auto-rigged variant");
+
     // Full-size stills of a few distinct poses.
-    for (name, values) in [
+    let poses = [
         ("rest", vec![]),
         (
             "turn-right",
@@ -93,11 +151,12 @@ fn main() -> aether_core::Result<()> {
                 ("BrowRY", 1.0),
             ],
         ),
-    ] {
+    ];
+    for (name, values) in &poses {
         let mut posed = doc.clone();
         for (param, value) in values {
             if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
-                posed.rig.set_value(id, value);
+                posed.rig.set_value(id, *value);
             }
         }
         let still = animation::flatten(&compositor.render(&posed), background);
@@ -105,6 +164,76 @@ fn main() -> aether_core::Result<()> {
         aether_io::save_png(&still, &path)?;
         println!("wrote {}", path.display());
     }
+
+    export_runtime_model(&doc, &compositor, &out, &poses)
+}
+
+/// Export the runtime model for games and the web player, and render the
+/// same poses with the software player as references for GPU renderers.
+fn export_runtime_model(
+    doc: &Document,
+    compositor: &Compositor,
+    out: &std::path::Path,
+    poses: &[(&str, Vec<(&str, f32)>)],
+) -> aether_core::Result<()> {
+    let model_dir = out.join("model");
+    let export = runtime_model::export_model_to_dir(doc, &model_dir, &Default::default())?;
+    for warning in &export.warnings {
+        println!("model export: {warning}");
+    }
+    println!(
+        "wrote {} ({} parts, {} texture pages)",
+        model_dir.display(),
+        export.model.parts.len(),
+        export.textures.len()
+    );
+
+    let reference_dir = out.join("model-reference");
+    std::fs::create_dir_all(&reference_dir)?;
+    let mut player = Player::new(export.model.clone()).map_err(aether_core::AetherError::rig)?;
+    let mut listing = Vec::new();
+    for (name, values) in poses {
+        player.reset();
+        let mut posed = doc.clone();
+        for (param, value) in values {
+            if let Some(index) = player.parameter_index(param) {
+                player.set_parameter(index, *value);
+            }
+            if let Some(id) = posed.rig.parameter_named(param).map(|p| p.id) {
+                posed.rig.set_value(id, *value);
+            }
+        }
+        player.update();
+        let runtime = cpu::render(&player, &export.textures);
+        let editor = compositor.render_with(
+            &posed,
+            &aether_render::RenderOptions {
+                include_background: false,
+                ..Default::default()
+            },
+        );
+        let worst = runtime
+            .data()
+            .iter()
+            .zip(editor.data())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        println!("player vs editor, {name}: largest channel difference {worst}");
+        let file = format!("{name}.png");
+        aether_io::save_png(&runtime, reference_dir.join(&file))?;
+        listing.push(serde_json::json!({
+            "name": name,
+            "image": file,
+            "values": values.iter().map(|(k, v)| (k.to_string(), serde_json::json!(v))).collect::<serde_json::Map<_, _>>(),
+            "positions": (0..export.model.parts.len()).map(|i| player.positions(i).to_vec()).collect::<Vec<_>>(),
+        }));
+    }
+    std::fs::write(
+        reference_dir.join("poses.json"),
+        serde_json::to_string(&listing).expect("reference poses serialise"),
+    )?;
+    println!("wrote {}", reference_dir.display());
     Ok(())
 }
 

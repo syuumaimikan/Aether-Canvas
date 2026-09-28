@@ -1,5 +1,6 @@
 //! The layer stack, the active layer's properties and its effect stack.
 
+use crate::icons;
 use crate::panels::{blend_mode_combo, effects_section};
 use crate::state::EditorState;
 use aether_core::LayerId;
@@ -50,7 +51,8 @@ pub fn layers_panel(ui: &mut Ui, state: &mut EditorState) {
                     clicked = Some(id);
                 }
                 if layer.mask.is_some() {
-                    ui.label(RichText::new("🎭").small()).on_hover_text("Has a mask");
+                    ui.label(RichText::new(icons::MASK).small())
+                        .on_hover_text("Has a mask");
                 }
             });
         }
@@ -68,13 +70,17 @@ pub fn layers_panel(ui: &mut Ui, state: &mut EditorState) {
 
 fn layer_toolbar(ui: &mut Ui, state: &mut EditorState) {
     ui.horizontal_wrapped(|ui| {
-        if ui.button("＋").on_hover_text(state.tr("layer.add")).clicked() {
+        if ui
+            .button(icons::ADD)
+            .on_hover_text(state.tr("layer.add"))
+            .clicked()
+        {
             if let Err(error) = state.add_layer() {
                 state.report_error("Add layer", &error);
             }
         }
         if ui
-            .button("🗀")
+            .button(icons::GROUP)
             .on_hover_text(state.tr("layer.add_group"))
             .clicked()
         {
@@ -83,7 +89,7 @@ fn layer_toolbar(ui: &mut Ui, state: &mut EditorState) {
             }
         }
         if ui
-            .button("⧉")
+            .button(icons::DUPLICATE)
             .on_hover_text(state.tr("layer.duplicate"))
             .clicked()
         {
@@ -92,20 +98,28 @@ fn layer_toolbar(ui: &mut Ui, state: &mut EditorState) {
                 state.report_error("Duplicate layer", &error);
             }
         }
-        if ui.button("🗑").on_hover_text(state.tr("layer.delete")).clicked() {
+        if ui
+            .button(icons::DELETE)
+            .on_hover_text(state.tr("layer.delete"))
+            .clicked()
+        {
             let id = state.doc.active_layer;
             if let Err(error) = state.delete_layer(id) {
                 state.report_error("Delete layer", &error);
             }
         }
-        if ui.button("⬆").on_hover_text(state.tr("layer.move_up")).clicked() {
+        if ui
+            .button(icons::UP)
+            .on_hover_text(state.tr("layer.move_up"))
+            .clicked()
+        {
             let id = state.doc.active_layer;
             if let Err(error) = state.move_layer_up(id) {
                 state.report_error("Move layer", &error);
             }
         }
         if ui
-            .button("⬇")
+            .button(icons::DOWN)
             .on_hover_text(state.tr("layer.move_down"))
             .clicked()
         {
@@ -115,7 +129,7 @@ fn layer_toolbar(ui: &mut Ui, state: &mut EditorState) {
             }
         }
         if ui
-            .button("⬓")
+            .button(icons::MERGE_DOWN)
             .on_hover_text(state.tr("layer.merge_down"))
             .clicked()
         {
