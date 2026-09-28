@@ -8,6 +8,7 @@ ships **one runtime, `aether-player`**, that plays it everywhere:
 | --- | --- | --- |
 | Web pages | `runtime/web/aether-player.js` + `aether_player.wasm` (≈190 KB gzipped), WebGL 1 or 2 | Tested in headless Chromium against the software renderer |
 | Godot 4.2+ | `runtime/godot`: the `AetherModel2D` node (a GDExtension), scripted from GDScript | Tested in Godot 4.3: logic headless, and drawing with all three renderers (Compatibility, Forward+, Mobile) against the software renderer |
+| Unity 2021.3+ | `runtime/unity`: the `com.aethercanvas.player` package (the `AetherModel` component, and the `AetherCanvas.Player` C# API for any .NET host) | The C# binding is tested with .NET against the native library, and every script compiles against Unity's assemblies; not yet run inside Unity |
 | JavaScript without a DOM | `AetherRuntime` / `AetherModel` from the same file | Tested in Node |
 | C, C++ and anything with a C FFI (C# / Unity P/Invoke, Swift, Kotlin/JNI, Python ctypes…) | The `aether_player` shared library and `include/aether_player.h` | `runtime/c/play.c` is compiled against the header and run by `cargo test` |
 | Rust | The `aether-player` crate | Tested |

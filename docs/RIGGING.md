@@ -325,15 +325,15 @@ of where each stands.
 | Pipeline | **PSD → rigged, playable model in one command** (`--auto-rig --export-model`), no window needed | Exported from the editor |
 | File format | **Open**: project and runtime model are documented JSON + PNG | Proprietary binary runtime format |
 | Runtime | **One open-source runtime running the editor's own rig code**: WebAssembly + WebGL 1/2 for the web (≈190 KB gzipped, ~0.8 ms per frame for the demo character), a C ABI for native hosts, a Rust crate, a software renderer. Every rig feature above plays back (bones and IK, drivers, jiggle, glue, physics, motions, behaviours), parity-tested against the editor; effects and masks are baked into textures and blend modes map to normal, multiply, screen and add | **Mature official SDKs** for Unity, native C++, web and Java |
-| Engine integration | **A Godot 4 package** (the `AetherModel2D` node: rig, motions, expressions, look-at, lip sync, face tracking, hit testing, clipping and every blend mode, tested in Godot with all three renderers); any engine through the C ABI; a wgpu renderer for Rust engines; no Unity package yet | **Official packages for Unity and native engines**; no official Godot package |
+| Engine integration | **A Godot 4 package** (the `AetherModel2D` node: rig, motions, expressions, look-at, lip sync, face tracking, hit testing, clipping and every blend mode, tested in Godot with all three renderers); **a Unity package** (the `AetherModel` component; its C# binding tested with .NET, its scripts compiled against Unity's assemblies, not yet run inside Unity); any engine through the C ABI; a wgpu renderer for Rust engines | **Official packages for Unity and native engines**; no official Godot package |
 | Editor preview | Poses and playback drawn on the GPU whenever that is exact (checked against the CPU compositor); the full compositor otherwise | GPU |
 | Live2D files | **Imports and exports Live2D motions and expressions**, so Aether's timeline can animate existing Live2D models | — |
 | Face tracking | **Built into the runtime**: webcam tracking in the web player (MediaPipe, on the device), and one API for any ARKit/MediaPipe-style tracker, mapped identically on every platform | Through third-party apps (VTube Studio and others) |
 | Ecosystem | New | **Large**: tracking apps, tutorials, marketplaces |
 | Price | **Free and open source** (MIT / Apache-2.0) | Free tier with limits; paid Pro licence |
 
-Where Live2D still leads is maturity and ecosystem: a ready-made Unity
-package, years of production use, and the tracking software,
+Where Live2D still leads is maturity and ecosystem: a Unity SDK proven in
+production, years of production use, and the tracking software,
 tutorials and model marketplaces built around it. In the editor and the rig
 model, Aether Canvas offers more: an integrated painting pipeline, bones and
 IK, expression drivers, generators and auto-rigging, a far richer
@@ -354,4 +354,5 @@ Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギ�
 * **Godot 4 パッケージ**：`AetherModel2D` ノードを置いて model.json を指定するだけで再生できます。モーション・表情・視線追従・口パク・フェイストラッキング・当たり判定を GDScript から操作でき、クリッピングと 4 種の合成モードも含めて Godot の 3 つのレンダラーすべてでソフトウェアレンダラーと同じ絵になることを Godot 上の自動テストで確認しています（Live2D には公式の Godot パッケージがありません）。
 * **Live2D との相互運用**：Live2D のモーション（.motion3.json）と表情（.exp3.json）を読み込み・書き出しできます。標準パラメータ名は Live2D の `Param` を除いたもの（`AngleX` ↔ `ParamAngleX`）なので、そのまま対応します。Aether のタイムライン（弾性・バウンス・スプリングのキー、WAV からの口パク焼き込み）で既存の Live2D モデル用のモーションを作ることもできます。
 * **フェイストラッキング**：Web プレイヤーにウェブカメラでの顔トラッキングを内蔵しています（MediaPipe をブラウザ内で実行し、映像は外部に送信しません）。首の向き・傾き、まばたき、視線、眉、口の開閉と笑顔がモデルに反映され、既定では鏡像として動きます。ARKit など他のトラッカーも同じ API で使えます。
-* 一方、Unity 向けの既製パッケージや、トラッキングアプリ・チュートリアル・モデル販売などのエコシステムでは Live2D が先行しています。
+* **Unity パッケージ**：`AetherModel` コンポーネントで再生できます（C# バインディングは .NET 上でネイティブライブラリと突き合わせてテスト済み、スクリプトは Unity のアセンブリに対してコンパイル確認済み。Unity 本体での描画はまだ未検証です）。
+* 一方、実績のある Unity SDK や、トラッキングアプリ・チュートリアル・モデル販売などのエコシステムでは Live2D が先行しています。

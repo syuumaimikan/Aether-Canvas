@@ -105,10 +105,12 @@ arrives with the FFmpeg pipeline of Phase 8.
   it is exact
 - A Godot 4 package: the `AetherModel2D` node, tested in Godot with all three
   renderers
+- A Unity package: the `AetherModel` component and a C# API
 
 Carried forward: path deformers, weight painting with a brush (weights are
 automatic and per-vertex editable through the data), a formal pose-group
-(part switching) editor, and a ready-made Unity package.
+(part switching) editor, and running the Unity package's drawing inside
+Unity in CI.
 
 ## Phase 7 — Motion graphics
 
