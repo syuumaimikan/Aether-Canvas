@@ -22,7 +22,11 @@ pub fn color_panel(ui: &mut Ui, state: &mut EditorState) {
         {
             state.secondary = from_color32(secondary);
         }
-        if ui.button("⇄").on_hover_text(state.tr("color.swap")).clicked() {
+        if ui
+            .button(crate::icons::SWAP)
+            .on_hover_text(state.tr("color.swap"))
+            .clicked()
+        {
             std::mem::swap(&mut state.primary, &mut state.secondary);
         }
     });

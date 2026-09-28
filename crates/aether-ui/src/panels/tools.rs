@@ -47,9 +47,61 @@ pub fn tool_options(ui: &mut Ui, state: &mut EditorState) {
         }
         ToolId::Transform => transform_options(ui, state),
         ToolId::Liquify => liquify_options(ui, state),
+        ToolId::Mesh => mesh_options(ui, state),
+        ToolId::Deform => deform_options(ui, state),
+        ToolId::Bone => {
+            ui.label(state.tr("tool.bone_hint"));
+        }
         ToolId::Move | ToolId::Pan | ToolId::Custom(_) => {
             ui.label("—");
         }
+    }
+}
+
+fn mesh_options(ui: &mut Ui, state: &mut EditorState) {
+    let lang = state.language;
+    ui.label(lang.tr("tool.mesh_hint"));
+    ui.add(
+        egui::Slider::new(&mut state.rig.tool.mesh_density, 0.3..=4.0)
+            .text(lang.tr("rig.density"))
+            .max_decimals(1),
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(lang.tr("rig.mesh_layer")).clicked() {
+            let layer = state.doc.active_layer;
+            if let Err(e) = state.mesh_layer(layer) {
+                state.report_error("Mesh", &e);
+            }
+        }
+        let layer = state.doc.active_layer;
+        if state.doc.rig.mesh(layer).is_some() && ui.button(lang.tr("tool.mesh_remove")).clicked() {
+            if let Err(e) = state.remove_mesh(layer) {
+                state.report_error("Mesh", &e);
+            }
+        }
+    });
+}
+
+fn deform_options(ui: &mut Ui, state: &mut EditorState) {
+    let lang = state.language;
+    ui.label(lang.tr("tool.deform_hint"));
+    ui.add(
+        egui::Slider::new(&mut state.rig.tool.radius, 1.0..=400.0)
+            .text(lang.tr("tool.deform_radius"))
+            .logarithmic(true),
+    );
+    let target = state
+        .rig
+        .tool
+        .selection
+        .map(|n| state.doc.rig.node_name(n))
+        .unwrap_or_else(|| "—".into());
+    ui.label(format!("{} {target}", lang.tr("param.keys_for")));
+    if state.rig.tool.blend_shape.is_some() {
+        ui.colored_label(
+            egui::Color32::from_rgb(230, 170, 90),
+            lang.tr("param.editing_shape"),
+        );
     }
 }
 

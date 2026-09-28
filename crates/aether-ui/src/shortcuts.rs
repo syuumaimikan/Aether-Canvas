@@ -83,11 +83,29 @@ pub enum Action {
     BrushSmaller,
     /// Swap primary and secondary colours.
     SwapColors,
+    /// Select the mesh tool.
+    ToolMesh,
+    /// Select the deform tool.
+    ToolDeform,
+    /// Select the bone tool.
+    ToolBone,
+    /// Play or pause the timeline.
+    PlayPause,
+    /// Step the playhead forward one frame.
+    NextFrame,
+    /// Step the playhead back one frame.
+    PreviousFrame,
+    /// Key every parameter at the playhead.
+    KeyAll,
+    /// Turn the live physics and behaviour preview on or off.
+    ToggleSimulation,
+    /// Put every parameter back at its default.
+    ResetPose,
 }
 
 impl Action {
     /// Every action, in the order the shortcut editor lists them.
-    pub const ALL: [Action; 36] = [
+    pub const ALL: [Action; 45] = [
         Action::NewDocument,
         Action::OpenDocument,
         Action::Save,
@@ -124,6 +142,15 @@ impl Action {
         Action::BrushLarger,
         Action::BrushSmaller,
         Action::SwapColors,
+        Action::ToolMesh,
+        Action::ToolDeform,
+        Action::ToolBone,
+        Action::PlayPause,
+        Action::NextFrame,
+        Action::PreviousFrame,
+        Action::KeyAll,
+        Action::ToggleSimulation,
+        Action::ResetPose,
     ];
 
     /// Human-readable label (English; menus use the i18n table instead).
@@ -165,6 +192,15 @@ impl Action {
             Action::BrushLarger => "Increase Brush Size",
             Action::BrushSmaller => "Decrease Brush Size",
             Action::SwapColors => "Swap Colors",
+            Action::ToolMesh => "Mesh Tool",
+            Action::ToolDeform => "Deform Tool",
+            Action::ToolBone => "Bone Tool",
+            Action::PlayPause => "Play / Pause",
+            Action::NextFrame => "Next Frame",
+            Action::PreviousFrame => "Previous Frame",
+            Action::KeyAll => "Key All Parameters",
+            Action::ToggleSimulation => "Toggle Physics Preview",
+            Action::ResetPose => "Reset Pose",
         }
     }
 }
@@ -290,6 +326,15 @@ impl ShortcutMap {
             (BrushLarger, Binding::key(Key::CloseBracket)),
             (BrushSmaller, Binding::key(Key::OpenBracket)),
             (SwapColors, Binding::key(Key::X)),
+            (ToolMesh, Binding::key(Key::U)),
+            (ToolDeform, Binding::key(Key::W)),
+            (ToolBone, Binding::key(Key::K)),
+            (PlayPause, Binding::key(Key::P)),
+            (NextFrame, Binding::key(Key::Period)),
+            (PreviousFrame, Binding::key(Key::Comma)),
+            (KeyAll, Binding::shift(Key::K)),
+            (ToggleSimulation, Binding::shift(Key::P)),
+            (ResetPose, Binding::shift(Key::R)),
         ];
         Self { bindings }
     }

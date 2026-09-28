@@ -25,7 +25,7 @@ pub fn brush_panel(ui: &mut Ui, state: &mut EditorState) {
             state.import_brush_presets_via_dialog();
         }
         if ui
-            .button("＋")
+            .button(crate::icons::ADD)
             .on_hover_text("Save the current settings as a preset")
             .clicked()
         {

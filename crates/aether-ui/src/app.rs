@@ -72,6 +72,8 @@ impl AetherApp {
     pub fn new(cc: &eframe::CreationContext<'_>, path: Option<PathBuf>) -> Self {
         let mut app = Self::default();
         app.apply_theme(&cc.egui_ctx);
+        // Japanese (and other CJK) UI text needs a system font.
+        crate::fonts::install_cjk_fallback(&cc.egui_ctx);
         if let Some(path) = path {
             app.open_path(path);
         }
@@ -114,7 +116,8 @@ impl AetherApp {
         self.applied_theme = Some(self.state.theme);
     }
 
-    fn set_workspace(&mut self, workspace: Workspace) {
+    /// Switch workspace: rebuild the panel layout and apply its defaults.
+    pub fn set_workspace(&mut self, workspace: Workspace) {
         self.state.set_workspace(workspace);
         self.dock = layout_for(workspace);
     }
@@ -313,6 +316,8 @@ impl AetherApp {
                 }
             });
 
+            ui.menu_button(lang.tr("menu.rig"), |ui| self.rig_menu(ui));
+
             ui.menu_button(lang.tr("menu.view"), |ui| {
                 for (key, action) in [
                     ("menu.view.zoom_in", Action::ZoomIn),
@@ -375,6 +380,68 @@ impl AetherApp {
         });
     }
 
+    /// The Rig menu: the rigging operations most used, one click away.
+    fn rig_menu(&mut self, ui: &mut egui::Ui) {
+        let lang = self.state.language;
+        let state = &mut self.state;
+        let mut result: Option<(&str, aether_core::Result<()>)> = None;
+        if ui.button(lang.tr("rig.mesh_layer")).clicked() {
+            let layer = state.doc.active_layer;
+            result = Some(("Mesh", state.mesh_layer(layer)));
+            ui.close();
+        }
+        if ui.button(lang.tr("rig.mesh_all")).clicked() {
+            result = Some(("Mesh", state.mesh_all_layers(None).map(|_| ())));
+            ui.close();
+        }
+        if ui.button(lang.tr("rig.add_warp")).clicked() {
+            result = Some(("Warp", state.add_warp_deformer("Warp")));
+            ui.close();
+        }
+        if ui.button(lang.tr("rig.add_rotation")).clicked() {
+            result = Some(("Rotation", state.add_rotation_deformer("Rotation")));
+            ui.close();
+        }
+        ui.separator();
+        if ui.button(lang.tr("param.standard")).clicked() {
+            result = Some(("Parameters", state.add_standard_parameters().map(|_| ())));
+            ui.close();
+        }
+        if ui.button(lang.tr("dyn.standard")).clicked() {
+            result = Some(("Physics", state.add_standard_dynamics().map(|_| ())));
+            ui.close();
+        }
+        ui.separator();
+        for (key, action) in [
+            ("menu.rig.play", Action::PlayPause),
+            ("menu.rig.simulate", Action::ToggleSimulation),
+            ("menu.rig.reset_pose", Action::ResetPose),
+            ("menu.rig.key_all", Action::KeyAll),
+        ] {
+            let label = lang.tr(key);
+            let shortcut = self.state.shortcuts.display(action);
+            if ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() {
+                self.run(action);
+                ui.close();
+            }
+        }
+        ui.separator();
+        let state = &mut self.state;
+        for (key, kind) in [
+            ("timeline.export_gif", crate::rigging::ExportKind::Gif),
+            ("timeline.export_png", crate::rigging::ExportKind::PngSequence),
+            ("timeline.export_sheet", crate::rigging::ExportKind::SpriteSheet),
+        ] {
+            if ui.button(lang.tr(key)).clicked() {
+                state.export_animation_via_dialog(kind);
+                ui.close();
+            }
+        }
+        if let Some((context, Err(error))) = result {
+            self.state.report_error(context, &error);
+        }
+    }
+
     /// A menu entry showing its keyboard shortcut; returns true when clicked.
     fn menu_item(&mut self, ui: &mut egui::Ui, key: &str, action: Action) -> bool {
         let label = self.state.language.tr(key);
@@ -426,7 +493,7 @@ impl AetherApp {
             ui.label(message);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.state.has_unsaved_changes() {
-                    ui.label("●").on_hover_text("Unsaved changes");
+                    ui.label(crate::icons::UNSAVED).on_hover_text("Unsaved changes");
                 }
             });
         });
@@ -686,12 +753,30 @@ impl AetherApp {
 
 impl eframe::App for AetherApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl AetherApp {
+    /// Draw one frame of the whole application into `ui`.
+    ///
+    /// Separate from [`eframe::App::ui`] so the complete interface can be
+    /// driven headlessly — the smoke tests below render every workspace and
+    /// every rig inspector through here without a window or a GPU.
+    pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.apply_theme(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.state.title()));
 
         if let Some(action) = self.state.shortcuts.consume(&ctx) {
             self.run(action);
+        }
+
+        // Advance physics, behaviours and playback; keep repainting while
+        // anything is moving.
+        let dt = ctx.input(|i| i.stable_dt).min(0.1);
+        if self.state.tick_rig(dt) {
+            ctx.request_repaint();
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
@@ -770,5 +855,187 @@ mod tests {
         assert_eq!(app.state().doc.layer_count(), 2);
         app.run(Action::Undo);
         assert_eq!(app.state().doc.layer_count(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Headless smoke tests: the whole interface, every workspace and every
+    // rig inspector, rendered through egui without a window.
+
+    use aether_core::math::{IRect, Vec2};
+    use aether_document::rig::RigNode;
+
+    /// A document with painted layers and a rig touching every feature.
+    fn rigged_app() -> AetherApp {
+        let mut doc = Document::new(256, 256, "rigged");
+        let face = doc.active_layer;
+        if let Some(pm) = doc.layers.get_mut(face).and_then(|l| l.pixmap_mut()) {
+            pm.fill_rect(IRect::new(64, 48, 128, 140), Rgba8::rgb(250, 220, 200));
+        }
+        let mut app = AetherApp::with_document(doc);
+        let state = app.state_mut();
+        let hair = state.add_layer().expect("layer");
+        if let Some(pm) = state.doc.layers.get_mut(hair).and_then(|l| l.pixmap_mut()) {
+            pm.fill_rect(IRect::new(56, 32, 144, 60), Rgba8::rgb(90, 60, 140));
+        }
+        state.mesh_all_layers(None).expect("mesh");
+        state.add_standard_parameters().expect("params");
+        state.rig.tool.selection = Some(RigNode::Mesh(face));
+        state.add_warp_deformer("Head").expect("warp");
+        let x = state.doc.rig.parameter_named("AngleX").expect("x").id;
+        let y = state.doc.rig.parameter_named("AngleY").expect("y").id;
+        state.generate_head_turn(x, Some(y)).expect("turn");
+        state.rig.tool.selection = Some(RigNode::Mesh(hair));
+        let sway = state.doc.rig.parameter_named("HairFront").expect("hair").id;
+        state
+            .generate_sway(sway, 10.0, aether_document::rig::generate::Anchor::Top)
+            .expect("sway");
+        state.add_rotation_deformer("Tilt").expect("rotation");
+        state
+            .add_bone(Vec2::new(128.0, 200.0), Vec2::new(128.0, 150.0), None)
+            .expect("bone");
+        let Some(RigNode::Bone(upper)) = state.rig.tool.selection else {
+            panic!("bone")
+        };
+        state
+            .add_bone(Vec2::new(128.0, 150.0), Vec2::new(128.0, 110.0), Some(upper))
+            .expect("bone");
+        state
+            .add_bone(Vec2::new(160.0, 120.0), Vec2::new(170.0, 120.0), None)
+            .expect("target");
+        state.add_standard_dynamics().expect("physics");
+        let body = state.doc.rig.parameter_named("BodyAngleX").expect("body").id;
+        state.add_driver(body, "AngleX * 0.3").expect("driver");
+        let m = state.add_motion("Idle").expect("motion");
+        state.rig.playhead = 0.5;
+        state.set_parameter_value(x, 20.0).expect("key");
+        state.rig.selected_key = Some((x, 0));
+        let _ = m;
+        app
+    }
+
+    fn frame(app: &mut AetherApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| app.draw(ui));
+    }
+
+    #[test]
+    fn every_workspace_and_inspector_renders_without_panicking() {
+        let ctx = egui::Context::default();
+        let mut app = rigged_app();
+        let nodes: Vec<Option<RigNode>> = {
+            let rig = &app.state().doc.rig;
+            let mut nodes = vec![None];
+            nodes.extend(rig.meshes.iter().map(|m| Some(RigNode::Mesh(m.layer))));
+            nodes.extend(rig.deformers.iter().map(|d| Some(RigNode::Deformer(d.id))));
+            nodes.extend(rig.bones.iter().map(|b| Some(RigNode::Bone(b.id))));
+            nodes
+        };
+        for workspace in Workspace::ALL {
+            app.set_workspace(workspace);
+            for node in &nodes {
+                app.state_mut().rig.tool.selection = *node;
+                frame(&mut app, &ctx, Vec::new());
+            }
+        }
+        // Dialogs and modes.
+        let x = app.state().doc.rig.parameters[0].clone();
+        app.state_mut().rig.editing_parameter = Some(x.clone());
+        app.state_mut().rig.editing_driver = Some((x.id, "AngleX * 2 +".into()));
+        app.state_mut().rig.playing = true;
+        app.state_mut().rig.simulate = true;
+        app.state_mut().rig.follow_pointer = true;
+        for tool in [
+            crate::tools::ToolId::Mesh,
+            crate::tools::ToolId::Deform,
+            crate::tools::ToolId::Bone,
+        ] {
+            app.state_mut().select_tool(tool);
+            frame(&mut app, &ctx, Vec::new());
+        }
+        assert!(app.state().rig.playhead > 0.0);
+    }
+
+    #[test]
+    fn dragging_on_the_canvas_with_the_deform_tool_edits_the_keyform() {
+        let ctx = egui::Context::default();
+        let mut app = rigged_app();
+        app.set_workspace(Workspace::Rigging);
+        let state = app.state_mut();
+        state.rig.animate = false;
+        state.rig.motion = None;
+        let face = state
+            .doc
+            .rig
+            .meshes
+            .iter()
+            .find(|m| m.name == "Layer 1")
+            .map(|m| m.layer)
+            .expect("face mesh");
+        state.rig.tool.selection = Some(RigNode::Mesh(face));
+        state.rig.tool.radius = 400.0;
+        state.reset_pose();
+        state.select_tool(crate::tools::ToolId::Deform);
+        // Lay out once, then find where the canvas put the document centre.
+        frame(&mut app, &ctx, Vec::new());
+        frame(&mut app, &ctx, Vec::new());
+        let before = app.state().history.entries().len();
+        let viewport = app.state().viewport;
+        let centre = viewport.doc_to_screen(Vec2::new(128.0, 128.0));
+        // The canvas tab sits right of the tools column; find its origin by
+        // probing: the viewport maps into the canvas rect, whose left edge is
+        // the tools column width.
+        let origin = egui::pos2(1600.0 * 0.13 + 6.0, 24.0 + 6.0);
+        let press = egui::pos2(origin.x + centre.x, origin.y + centre.y);
+        let pointer = |pos: egui::Pos2, pressed: Option<bool>| {
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            events
+        };
+        frame(&mut app, &ctx, pointer(press, None));
+        frame(&mut app, &ctx, pointer(press, Some(true)));
+        for step in 1..=6 {
+            let p = press + egui::vec2(step as f32 * 6.0, 0.0);
+            frame(&mut app, &ctx, pointer(p, None));
+        }
+        frame(
+            &mut app,
+            &ctx,
+            pointer(press + egui::vec2(36.0, 0.0), Some(false)),
+        );
+        frame(&mut app, &ctx, Vec::new());
+        let after = app.state().history.entries().len();
+        assert_eq!(
+            after,
+            before + 1,
+            "one undoable deform step: {:?}",
+            app.state().status
+        );
+        let moved = app
+            .state()
+            .doc
+            .rig
+            .mesh(face)
+            .map(|m| {
+                m.keyforms
+                    .forms
+                    .iter()
+                    .any(|f| f.offsets.iter().any(|o| o.x > 1.0))
+            })
+            .unwrap_or(false);
+        assert!(moved, "the drag pushed vertices right");
     }
 }

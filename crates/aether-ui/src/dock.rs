@@ -26,6 +26,14 @@ pub enum PanelKind {
     History,
     /// Document properties.
     Properties,
+    /// Rig parameters.
+    Parameters,
+    /// Rig hierarchy and inspector.
+    Rig,
+    /// Animation timeline.
+    Timeline,
+    /// Physics, behaviours, drivers and expressions.
+    Dynamics,
 }
 
 impl PanelKind {
@@ -39,6 +47,10 @@ impl PanelKind {
             PanelKind::Brush => "brush.title",
             PanelKind::History => "history.title",
             PanelKind::Properties => "properties.title",
+            PanelKind::Parameters => "param.title",
+            PanelKind::Rig => "rig.title",
+            PanelKind::Timeline => "timeline.title",
+            PanelKind::Dynamics => "dyn.title",
         }
     }
 }
@@ -88,6 +100,31 @@ pub fn layout_for(workspace: Workspace) -> DockState<PanelKind> {
                 .split_below(right, 0.55, vec![PanelKind::History]);
             let _ = canvas;
         }
+        Workspace::Rigging => {
+            let [canvas, _tools] = dock
+                .main_surface_mut()
+                .split_left(root, 0.13, vec![PanelKind::Tools]);
+            let [_, right] =
+                dock.main_surface_mut()
+                    .split_right(canvas, 0.66, vec![PanelKind::Rig, PanelKind::Layers]);
+            dock.main_surface_mut().split_below(
+                right,
+                0.46,
+                vec![PanelKind::Parameters, PanelKind::Dynamics],
+            );
+        }
+        Workspace::Animation => {
+            let [canvas, _tools] = dock
+                .main_surface_mut()
+                .split_left(root, 0.11, vec![PanelKind::Tools]);
+            let [canvas, _right] = dock.main_surface_mut().split_right(
+                canvas,
+                0.72,
+                vec![PanelKind::Parameters, PanelKind::Dynamics, PanelKind::Layers],
+            );
+            dock.main_surface_mut()
+                .split_below(canvas, 0.64, vec![PanelKind::Timeline]);
+        }
     }
     dock
 }
@@ -116,6 +153,10 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
             PanelKind::Brush => panels::brush_panel(ui, self.state),
             PanelKind::History => panels::history_panel(ui, self.state),
             PanelKind::Properties => panels::properties_panel(ui, self.state),
+            PanelKind::Parameters => panels::parameters_panel(ui, self.state),
+            PanelKind::Rig => panels::rig_panel(ui, self.state),
+            PanelKind::Timeline => panels::timeline_panel(ui, self.state),
+            PanelKind::Dynamics => panels::dynamics_panel(ui, self.state),
         }
     }
 
@@ -167,6 +208,23 @@ mod tests {
     }
 
     #[test]
+    fn the_rigging_layouts_show_the_rig_panels() {
+        let rigging = tabs(&layout_for(Workspace::Rigging));
+        for expected in [
+            PanelKind::Rig,
+            PanelKind::Parameters,
+            PanelKind::Dynamics,
+            PanelKind::Tools,
+        ] {
+            assert!(rigging.contains(&expected), "rigging is missing {expected:?}");
+        }
+        let animation = tabs(&layout_for(Workspace::Animation));
+        for expected in [PanelKind::Timeline, PanelKind::Parameters] {
+            assert!(animation.contains(&expected), "animation is missing {expected:?}");
+        }
+    }
+
+    #[test]
     fn panel_titles_have_translation_keys() {
         for kind in [
             PanelKind::Canvas,
@@ -176,6 +234,10 @@ mod tests {
             PanelKind::Brush,
             PanelKind::History,
             PanelKind::Properties,
+            PanelKind::Parameters,
+            PanelKind::Rig,
+            PanelKind::Timeline,
+            PanelKind::Dynamics,
         ] {
             assert_ne!(
                 crate::Language::English.tr(kind.title_key()),
