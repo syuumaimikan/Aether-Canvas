@@ -4,7 +4,7 @@
 //!
 //! * [`Compositor`] – walks the layer tree and produces a flat [`Pixmap`].
 //!   Groups, clipping, masks, adjustment layers and blend modes are all
-//!   resolved here.
+//!   resolved here, and rigged layers are redrawn through their posed meshes.
 //! * [`RenderCache`] – keeps the last composite and re-renders only the region
 //!   the document reports as dirty.
 //! * [`Viewport`] – the canvas view transform: pan, zoom, rotation and mirror,

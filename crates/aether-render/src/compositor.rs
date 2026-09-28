@@ -19,16 +19,30 @@
 //! A layer's non-destructive effect stack is evaluated between producing its
 //! content and blending it in, so a drop shadow lands behind the layer but in
 //! front of everything below it.
+//!
+//! ## Rigged layers
+//!
+//! When the document's rig binds a mesh to a raster layer, the rig is posed
+//! once per pass and the layer's pixels are redrawn through the deformed mesh
+//! *as the layer's content*. Everything downstream — effects, masks, clipping,
+//! all blend modes, adjustment layers above — applies to the deformed result
+//! exactly as it would to painted pixels. Keyed draw order moves a rigged
+//! layer among its siblings, carrying its clipping layers with it. A mesh at
+//! rest draws the layer directly, so binding a mesh never changes a single
+//! pixel until something moves.
 
 use aether_core::blend::BlendMode;
 use aether_core::color::Rgba8;
 use aether_core::math::IRect;
 use aether_core::LayerId;
 use aether_document::layer::{Layer, LayerContent};
+use aether_document::rig::RigPose;
 use aether_document::{Background, Document};
 use aether_raster::composite::{composite_pixmap, CompositeOptions};
+use aether_raster::mesh::{draw_textured_mesh, MeshDrawOptions};
 use aether_raster::transform::{transform_pixmap, Interpolation};
 use aether_raster::{Mask, Pixmap};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Renders content for a plugin-defined layer.
@@ -52,6 +66,9 @@ pub struct RenderOptions {
     pub solo_layer: Option<LayerId>,
     /// Resampling used when a layer carries a transform.
     pub interpolation: Interpolation,
+    /// Pose rigged layers. When false, rigged layers draw as painted, which is
+    /// what the rig editor shows in "rest pose" mode.
+    pub deform: bool,
 }
 
 impl Default for RenderOptions {
@@ -61,6 +78,7 @@ impl Default for RenderOptions {
             include_background: true,
             solo_layer: None,
             interpolation: Interpolation::Bilinear,
+            deform: true,
         }
     }
 }
@@ -87,6 +105,30 @@ impl std::fmt::Debug for Compositor {
     }
 }
 
+/// Everything one pass needs, threaded through the recursive walk.
+struct Pass<'a> {
+    doc: &'a Document,
+    options: &'a RenderOptions,
+    region: IRect,
+    pose: Option<RigPose>,
+}
+
+impl Pass<'_> {
+    /// The posed mesh for a layer, when it is deformed away from rest.
+    fn deformed(&self, id: LayerId) -> Option<&aether_document::rig::MeshPose> {
+        self.pose.as_ref()?.mesh(id).filter(|m| !m.rest)
+    }
+
+    /// Keyed draw-order offset of a layer.
+    fn draw_order(&self, id: LayerId) -> f32 {
+        self.pose
+            .as_ref()
+            .and_then(|p| p.mesh(id))
+            .map(|m| m.draw_order)
+            .unwrap_or(0.0)
+    }
+}
+
 impl Compositor {
     /// A compositor with no plugin renderers registered.
     pub fn new() -> Self {
@@ -108,6 +150,16 @@ impl Compositor {
         let mut target = Pixmap::new(doc.width, doc.height);
         self.render_into(doc, &mut target, options);
         target
+    }
+
+    fn pass<'a>(&self, doc: &'a Document, options: &'a RenderOptions, region: IRect) -> Pass<'a> {
+        let pose = (options.deform && !doc.rig.is_inert()).then(|| doc.rig.evaluate());
+        Pass {
+            doc,
+            options,
+            region,
+            pose,
+        }
     }
 
     /// Composite into an existing document-sized buffer.
@@ -132,7 +184,8 @@ impl Compositor {
             _ => target.fill_rect(region, Rgba8::TRANSPARENT),
         }
 
-        self.composite_children(doc, None, target, region, options);
+        let pass = self.pass(doc, options, region);
+        self.composite_children(&pass, None, target);
     }
 
     /// Composite one layer on its own, ignoring the rest of the tree.
@@ -148,13 +201,13 @@ impl Compositor {
         let Some(layer) = doc.layers.get(id) else {
             return target;
         };
-        let region = doc.bounds();
-        if let Some(source) = self.layer_source(doc, layer, &target, region, &options) {
+        let pass = self.pass(doc, &options, doc.bounds());
+        if let Some(source) = self.layer_source(&pass, layer, &target) {
             let opts = CompositeOptions {
                 blend: BlendMode::Normal,
                 opacity: 1.0,
                 offset: (0, 0),
-                region: Some(region),
+                region: Some(pass.region),
                 alpha_lock: false,
             };
             composite_pixmap(&mut target, &source, &opts, None);
@@ -163,61 +216,57 @@ impl Compositor {
     }
 
     /// Composite the children of `parent` onto `backdrop`.
-    fn composite_children(
-        &self,
-        doc: &Document,
-        parent: Option<LayerId>,
-        backdrop: &mut Pixmap,
-        region: IRect,
-        options: &RenderOptions,
-    ) {
-        let children: Vec<LayerId> = doc.layers.children_of(parent).to_vec();
-        let mut index = 0usize;
-        while index < children.len() {
-            let id = children[index];
+    fn composite_children(&self, pass: &Pass, parent: Option<LayerId>, backdrop: &mut Pixmap) {
+        let doc = pass.doc;
+        let children: &[LayerId] = doc.layers.children_of(parent);
+
+        // Group each base layer with the run of clipping layers riding on it.
+        // Clipping layers at the very bottom have no base and are skipped.
+        let mut units: Vec<(f32, LayerId, Vec<LayerId>)> = Vec::new();
+        for (index, &id) in children.iter().enumerate() {
             let Some(layer) = doc.layers.get(id) else {
-                index += 1;
                 continue;
             };
-            // Clipping layers are consumed by the base layer below them.
             if layer.clipping {
-                index += 1;
-                continue;
-            }
-            // Collect the run of clipping layers stacked on this base.
-            let mut clip_run: Vec<LayerId> = Vec::new();
-            let mut look = index + 1;
-            while look < children.len() {
-                match doc.layers.get(children[look]) {
-                    Some(next) if next.clipping => {
-                        clip_run.push(children[look]);
-                        look += 1;
-                    }
-                    _ => break,
+                if let Some(unit) = units.last_mut() {
+                    unit.2.push(id);
                 }
-            }
-
-            if self.is_hidden(doc, layer, options) {
-                index = look;
                 continue;
             }
+            units.push((index as f32 + pass.draw_order(id), id, Vec::new()));
+        }
+        // Keyed draw order moves whole units; a stable sort keeps the tree
+        // order wherever no offsets are keyed.
+        if units
+            .iter()
+            .enumerate()
+            .any(|(i, u)| i > 0 && u.0 < units[i - 1].0)
+        {
+            units.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
 
-            if clip_run.is_empty() {
-                self.composite_layer(doc, layer, backdrop, region, options);
-            } else {
-                self.composite_clipping_group(doc, layer, &clip_run, backdrop, region, options);
+        for (_, id, clip_run) in &units {
+            let Some(layer) = doc.layers.get(*id) else {
+                continue;
+            };
+            if self.is_hidden(pass, layer) {
+                continue;
             }
-            index = look;
+            if clip_run.is_empty() {
+                self.composite_layer(pass, layer, backdrop);
+            } else {
+                self.composite_clipping_group(pass, layer, clip_run, backdrop);
+            }
         }
     }
 
-    fn is_hidden(&self, doc: &Document, layer: &Layer, options: &RenderOptions) -> bool {
+    fn is_hidden(&self, pass: &Pass, layer: &Layer) -> bool {
         if !layer.visible || layer.opacity <= 0.0 {
             return true;
         }
-        if let Some(solo) = options.solo_layer {
+        if let Some(solo) = pass.options.solo_layer {
             // A solo layer's ancestors still have to be traversed.
-            if layer.id != solo && !doc.layers.subtree_ids(layer.id).contains(&solo) {
+            if layer.id != solo && !pass.doc.layers.subtree_ids(layer.id).contains(&solo) {
                 return true;
             }
         }
@@ -225,14 +274,7 @@ impl Compositor {
     }
 
     /// Blend one layer into the backdrop.
-    fn composite_layer(
-        &self,
-        doc: &Document,
-        layer: &Layer,
-        backdrop: &mut Pixmap,
-        region: IRect,
-        options: &RenderOptions,
-    ) {
+    fn composite_layer(&self, pass: &Pass, layer: &Layer, backdrop: &mut Pixmap) {
         // A pass-through group blends its children straight into the backdrop.
         if let LayerContent::Group(group) = &layer.content {
             let needs_isolation = group.isolate
@@ -240,19 +282,19 @@ impl Compositor {
                 || layer.blend_mode != BlendMode::Normal
                 || layer.active_mask().is_some();
             if !needs_isolation {
-                self.composite_children(doc, Some(layer.id), backdrop, region, options);
+                self.composite_children(pass, Some(layer.id), backdrop);
                 return;
             }
         }
 
-        let Some(source) = self.layer_source(doc, layer, backdrop, region, options) else {
+        let Some(source) = self.layer_source(pass, layer, backdrop) else {
             return;
         };
         let opts = CompositeOptions {
             blend: layer.blend_mode,
             opacity: layer.opacity,
             offset: (0, 0),
-            region: Some(region),
+            region: Some(pass.region),
             alpha_lock: false,
         };
         composite_pixmap(backdrop, &source, &opts, layer.active_mask());
@@ -261,28 +303,26 @@ impl Compositor {
     /// Composite a base layer plus the clipping layers riding on it.
     fn composite_clipping_group(
         &self,
-        doc: &Document,
+        pass: &Pass,
         base: &Layer,
         clipped: &[LayerId],
         backdrop: &mut Pixmap,
-        region: IRect,
-        options: &RenderOptions,
     ) {
-        let Some(base_pixels) = self.layer_source(doc, base, backdrop, region, options) else {
+        let Some(base_pixels) = self.layer_source(pass, base, backdrop) else {
             return;
         };
         // The clipping shape is the base layer's own alpha.
         let clip_mask = Mask::from_alpha(&base_pixels);
 
-        let mut group = base_pixels;
+        let mut group = base_pixels.into_owned();
         for id in clipped {
-            let Some(layer) = doc.layers.get(*id) else {
+            let Some(layer) = pass.doc.layers.get(*id) else {
                 continue;
             };
-            if self.is_hidden(doc, layer, options) {
+            if self.is_hidden(pass, layer) {
                 continue;
             }
-            let Some(source) = self.layer_source(doc, layer, &group, region, options) else {
+            let Some(source) = self.layer_source(pass, layer, &group) else {
                 continue;
             };
             let mut mask = clip_mask.clone();
@@ -293,7 +333,7 @@ impl Compositor {
                 blend: layer.blend_mode,
                 opacity: layer.opacity,
                 offset: (0, 0),
-                region: Some(region),
+                region: Some(pass.region),
                 alpha_lock: false,
             };
             composite_pixmap(&mut group, &source, &opts, Some(&mask));
@@ -303,7 +343,7 @@ impl Compositor {
             blend: base.blend_mode,
             opacity: base.opacity,
             offset: (0, 0),
-            region: Some(region),
+            region: Some(pass.region),
             alpha_lock: false,
         };
         composite_pixmap(backdrop, &group, &opts, base.active_mask());
@@ -312,54 +352,80 @@ impl Compositor {
     /// Produce the pixels a layer contributes, in document space.
     ///
     /// `backdrop` is what sits below the layer; adjustment layers read it.
-    fn layer_source(
+    /// Plain raster layers are borrowed rather than copied: at 4K a copy per
+    /// layer per dab would dominate the cost of painting.
+    fn layer_source<'p>(
         &self,
-        doc: &Document,
-        layer: &Layer,
+        pass: &'p Pass,
+        layer: &'p Layer,
         backdrop: &Pixmap,
-        region: IRect,
-        options: &RenderOptions,
-    ) -> Option<Pixmap> {
-        let source = match &layer.content {
-            LayerContent::Raster(raster) => raster.pixmap.clone(),
+    ) -> Option<Cow<'p, Pixmap>> {
+        let doc = pass.doc;
+        let region = pass.region;
+        let source: Cow<'p, Pixmap> = match &layer.content {
+            LayerContent::Raster(raster) => match (pass.deformed(layer.id), doc.rig.mesh(layer.id)) {
+                (Some(pose), Some(mesh)) => {
+                    let mut deformed = Pixmap::new(doc.width, doc.height);
+                    let opts = MeshDrawOptions {
+                        region,
+                        opacity: pose.opacity,
+                        multiply: pose.multiply,
+                        screen: pose.screen,
+                        interpolation: pass.options.interpolation,
+                    };
+                    draw_textured_mesh(
+                        &mut deformed,
+                        &raster.pixmap,
+                        &pose.positions,
+                        &mesh.vertices,
+                        &mesh.triangles,
+                        &opts,
+                    );
+                    Cow::Owned(deformed)
+                }
+                _ => Cow::Borrowed(&raster.pixmap),
+            },
             LayerContent::Fill(fill) => {
                 let mut pm = Pixmap::new(doc.width, doc.height);
                 pm.fill_rect(region, fill.color);
-                pm
+                Cow::Owned(pm)
             }
             LayerContent::Adjustment(adjustment) => {
                 let mut adjusted = backdrop.clone();
                 adjustment.adjustment.apply(&mut adjusted, Some(region));
-                adjusted
+                Cow::Owned(adjusted)
             }
             LayerContent::Group(_) => {
                 // Isolated group: composite the children onto an empty buffer.
                 let mut buffer = Pixmap::new(doc.width, doc.height);
-                self.composite_children(doc, Some(layer.id), &mut buffer, region, options);
-                buffer
+                self.composite_children(pass, Some(layer.id), &mut buffer);
+                Cow::Owned(buffer)
             }
             LayerContent::Custom { kind, .. } => {
                 let renderer = self.custom.get(kind)?;
-                renderer.render(layer, doc.width, doc.height)?
+                Cow::Owned(renderer.render(layer, doc.width, doc.height)?)
             }
         };
 
         let source = if layer.transform.is_identity() {
             source
         } else {
-            transform_pixmap(
+            Cow::Owned(transform_pixmap(
                 &source,
                 &layer.transform,
                 doc.width,
                 doc.height,
-                options.interpolation,
-            )
+                pass.options.interpolation,
+            ))
         };
 
         // Effects run last, so they see the layer exactly as it will be blended
         // — including its transform — but before opacity, mask and blend mode.
         if layer.has_effects() {
-            Some(aether_raster::effect::apply_stack(&source, &layer.effects))
+            Some(Cow::Owned(aether_raster::effect::apply_stack(
+                &source,
+                &layer.effects,
+            )))
         } else {
             Some(source)
         }
@@ -777,5 +843,169 @@ mod effect_tests {
         let out = Compositor::new().render(&doc);
         assert!(out.get(20, 32).a > 0, "glow inside the mask");
         assert_eq!(out.get(50, 32).a, 0, "glow must not escape the mask");
+    }
+}
+
+#[cfg(test)]
+mod rig_tests {
+    use super::*;
+    use aether_core::color::Rgba8;
+    use aether_core::math::{vec2, Rect};
+    use aether_core::ParameterId;
+    use aether_document::layer::Layer;
+    use aether_document::rig::{ArtMesh, KeyAxis, Parameter};
+    use aether_raster::{EffectKind, LayerEffect};
+
+    fn doc_with_layers(n: usize) -> (Document, Vec<LayerId>) {
+        let mut doc = Document::empty(64, 64, "rig");
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let id = doc.next_layer_id();
+            doc.layers
+                .push_top(Layer::raster(id, format!("L{i}"), 64, 64))
+                .expect("insert");
+            ids.push(id);
+        }
+        (doc, ids)
+    }
+
+    fn fill_layer(doc: &mut Document, id: LayerId, color: Rgba8) {
+        if let Some(pm) = doc.layers.get_mut(id).and_then(|l| l.pixmap_mut()) {
+            pm.fill_rect(IRect::new(0, 0, 8, 8), color);
+        }
+    }
+
+    /// A 64×64 document whose single layer holds a red 8×8 square at (8, 8),
+    /// meshed with a quad over the square's neighbourhood and keyed to slide
+    /// 30 px right when parameter `P` is at 1.
+    fn rigged_square() -> (Document, LayerId, ParameterId) {
+        let (mut doc, ids) = doc_with_layers(1);
+        let id = ids[0];
+        if let Some(pm) = doc.layers.get_mut(id).and_then(|l| l.pixmap_mut()) {
+            pm.fill_rect(IRect::new(8, 8, 8, 8), Rgba8::rgb(255, 0, 0));
+        }
+        let param = doc.ids.parameter();
+        doc.rig
+            .add_parameter(Parameter::new(param, "Slide", 0.0, 1.0, 0.0))
+            .expect("param");
+        let mut mesh = ArtMesh::quad(id, Rect::from_corners(vec2(4.0, 4.0), vec2(20.0, 20.0)));
+        mesh.keyforms
+            .add_axis(KeyAxis::new(param, [0.0, 1.0]).expect("axis"))
+            .expect("axis");
+        for o in &mut mesh.keyforms.forms[1].offsets {
+            *o = vec2(30.0, 0.0);
+        }
+        doc.rig.set_mesh(mesh);
+        (doc, id, param)
+    }
+
+    #[test]
+    fn a_rigged_layer_at_rest_renders_exactly_as_painted() {
+        let (doc, _, _) = rigged_square();
+        let mut plain = doc.clone();
+        plain.rig = Default::default();
+        assert_eq!(Compositor::new().render(&doc), Compositor::new().render(&plain));
+    }
+
+    #[test]
+    fn posing_a_parameter_moves_the_layer() {
+        let (mut doc, _, param) = rigged_square();
+        doc.rig.set_value(param, 1.0);
+        let out = Compositor::new().render(&doc);
+        assert_eq!(out.get(10, 10).a, 0, "the square left its painted position");
+        assert_eq!(out.get(40, 10), Rgba8::rgb(255, 0, 0), "and arrived 30 px right");
+        doc.rig.set_value(param, 0.5);
+        let half = Compositor::new().render(&doc);
+        assert_eq!(
+            half.get(25, 10),
+            Rgba8::rgb(255, 0, 0),
+            "halfway at half the value"
+        );
+    }
+
+    #[test]
+    fn rigged_layers_keep_blend_modes_opacity_and_effects() {
+        let (mut doc, id, param) = rigged_square();
+        doc.rig.set_value(param, 1.0);
+        if let Some(layer) = doc.layers.get_mut(id) {
+            layer.opacity = 0.5;
+            layer.effects.push(LayerEffect::new(EffectKind::ColorOverlay {
+                color: Rgba8::rgb(0, 0, 255),
+                opacity: 1.0,
+                blend: BlendMode::Normal,
+            }));
+        }
+        let out = Compositor::new().render(&doc);
+        let px = out.get(40, 10);
+        assert_eq!((px.r, px.b), (0, 255), "the effect sees the deformed pixels");
+        assert!((px.a as i32 - 128).abs() <= 2, "and layer opacity still applies");
+    }
+
+    #[test]
+    fn keyed_opacity_and_tint_reach_the_composite() {
+        let (mut doc, id, param) = rigged_square();
+        if let Some(mesh) = doc.rig.mesh_mut(id) {
+            mesh.keyforms.forms[1]
+                .offsets
+                .iter_mut()
+                .for_each(|o| *o = vec2(0.0, 0.0));
+            mesh.keyforms.forms[1].opacity = 0.0;
+            mesh.keyforms.forms[1].multiply = [0.0, 1.0, 1.0];
+        }
+        doc.rig.set_value(param, 0.5);
+        let out = Compositor::new().render(&doc);
+        let px = out.get(10, 10);
+        assert!((px.a as i32 - 128).abs() <= 2, "half faded: {px:?}");
+        assert!((px.r as i32 - 128).abs() <= 2, "half tinted: {px:?}");
+    }
+
+    #[test]
+    fn keyed_draw_order_moves_a_layer_above_its_sibling() {
+        let (mut doc, ids) = doc_with_layers(2);
+        fill_layer(&mut doc, ids[0], Rgba8::rgb(255, 0, 0));
+        fill_layer(&mut doc, ids[1], Rgba8::rgb(0, 255, 0));
+        assert_eq!(Compositor::new().render(&doc).get(4, 4), Rgba8::rgb(0, 255, 0));
+        let param = doc.ids.parameter();
+        doc.rig
+            .add_parameter(Parameter::new(param, "Front", 0.0, 1.0, 0.0))
+            .expect("param");
+        let mut mesh = ArtMesh::quad(ids[0], Rect::from_corners(vec2(0.0, 0.0), vec2(8.0, 8.0)));
+        mesh.keyforms
+            .add_axis(KeyAxis::new(param, [0.0, 1.0]).expect("axis"))
+            .expect("axis");
+        mesh.keyforms.forms[1].draw_order = 1.5;
+        doc.rig.set_mesh(mesh);
+        doc.rig.set_value(param, 1.0);
+        assert_eq!(
+            Compositor::new().render(&doc).get(4, 4),
+            Rgba8::rgb(255, 0, 0),
+            "the bottom layer was keyed in front"
+        );
+    }
+
+    #[test]
+    fn deformation_can_be_switched_off_for_the_rest_pose_view() {
+        let (mut doc, _, param) = rigged_square();
+        doc.rig.set_value(param, 1.0);
+        let options = RenderOptions {
+            deform: false,
+            ..Default::default()
+        };
+        let out = Compositor::new().render_with(&doc, &options);
+        assert_eq!(out.get(10, 10), Rgba8::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn region_renders_of_a_posed_rig_match_a_full_render() {
+        let (mut doc, _, param) = rigged_square();
+        doc.rig.set_value(param, 0.7);
+        let compositor = Compositor::new();
+        let full = compositor.render(&doc);
+        let mut partial = full.clone();
+        partial.fill(Rgba8::rgb(1, 2, 3));
+        for region in [IRect::new(0, 0, 32, 64), IRect::new(32, 0, 32, 64)] {
+            compositor.render_into(&doc, &mut partial, &RenderOptions::default().with_region(region));
+        }
+        assert_eq!(partial, full);
     }
 }

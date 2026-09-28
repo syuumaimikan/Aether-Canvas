@@ -8,6 +8,7 @@
 //! ├── layers/<id>.png   one PNG per raster layer
 //! ├── masks/<id>.png    one grayscale PNG per layer mask
 //! ├── selection.png     the saved selection, when there is one
+//! ├── rig.json          rigging and animation, when the document has any
 //! └── thumbnail.png     512px preview for file browsers
 //! ```
 //!
@@ -48,6 +49,7 @@ pub const EXTENSION: &str = "aether";
 const MANIFEST: &str = "project.json";
 const THUMBNAIL: &str = "thumbnail.png";
 const SELECTION: &str = "selection.png";
+const RIG: &str = "rig.json";
 
 /// Top level of `project.json`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +76,10 @@ struct DocumentDto {
     layers: Vec<LayerDto>,
     #[serde(default)]
     selection: Option<String>,
+    /// Archive path of the rig, when the document has one. Added after schema
+    /// version 1 shipped; older files have none.
+    #[serde(default)]
+    rig: Option<String>,
 }
 
 /// One layer's properties plus references to its data entries.
@@ -247,6 +253,17 @@ pub fn serialize_project(doc: &Document) -> Result<Vec<u8>> {
             None => None,
         };
 
+        // The rig is kept out of the manifest: it can be large, and a
+        // separate entry keeps project.json readable.
+        let rig = if doc.rig == aether_document::rig::Rig::default() {
+            None
+        } else {
+            let json = serde_json::to_vec(&doc.rig)
+                .map_err(|e| AetherError::serialization(format!("could not write the rig: {e}")))?;
+            blobs.insert(RIG.to_string(), json);
+            Some(RIG.to_string())
+        };
+
         let manifest = ProjectFile {
             schema_version: SCHEMA_VERSION,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -262,6 +279,7 @@ pub fn serialize_project(doc: &Document) -> Result<Vec<u8>> {
                 roots: doc.layers.roots().to_vec(),
                 layers,
                 selection,
+                rig,
             },
         };
 
@@ -420,6 +438,12 @@ pub fn deserialize_project(bytes: &[u8]) -> Result<Document> {
         let mut selection = Selection::none();
         selection.set_mask(Some(mask));
         doc.selection = selection;
+    }
+    if let Some(bytes) = dto.rig.as_ref().and_then(|p| blobs.get(p)) {
+        // A damaged rig is reported rather than silently dropped: saving over
+        // the file afterwards would otherwise destroy the rigging work.
+        doc.rig = serde_json::from_slice(bytes)
+            .map_err(|e| AetherError::serialization(format!("rig.json does not match the schema: {e}")))?;
     }
     doc.repair();
     Ok(doc)
@@ -761,5 +785,86 @@ mod effect_round_trip_tests {
         let back = deserialize_project(&out.into_inner()).expect("older files must still open");
         assert_eq!(back.layer_count(), 1);
         assert!(back.layers.iter().all(|l| l.effects.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod rig_round_trip_tests {
+    use super::*;
+
+    fn sample_document() -> Document {
+        let mut doc = Document::new(32, 32, "rigged");
+        let id = doc.active_layer;
+        if let Some(pm) = doc.layers.get_mut(id).and_then(|l| l.pixmap_mut()) {
+            pm.fill(Rgba8::rgb(10, 20, 30));
+        }
+        doc
+    }
+
+    #[test]
+    fn rigs_round_trip_through_a_project_file() {
+        use aether_core::math::{vec2, Rect};
+        use aether_document::rig::{ArtMesh, KeyAxis, Motion, Parameter};
+        let mut doc = sample_document();
+        let layer = doc.active_layer;
+        let param = doc.ids.parameter();
+        doc.rig
+            .add_parameter(Parameter::new(param, "AngleX", -30.0, 30.0, 0.0))
+            .expect("param");
+        let mut mesh = ArtMesh::quad(layer, Rect::from_corners(vec2(0.0, 0.0), vec2(16.0, 16.0)));
+        mesh.keyforms
+            .add_axis(KeyAxis::new(param, [-30.0, 30.0]).expect("axis"))
+            .expect("axis");
+        mesh.keyforms.forms[1].offsets[0] = vec2(3.0, 4.0);
+        doc.rig.set_mesh(mesh);
+        let mut motion = Motion::new("idle", 2.0, 30.0);
+        motion.track_mut(param).set_key(1.0, 12.0);
+        doc.rig.motions.push(motion);
+        doc.rig.set_value(param, 7.5);
+
+        let bytes = serialize_project(&doc).expect("save");
+        let back = deserialize_project(&bytes).expect("load");
+        assert_eq!(back.rig, doc.rig);
+        assert!(back.next_layer_id().raw() > param.raw());
+    }
+
+    #[test]
+    fn documents_without_a_rig_write_no_rig_entry() {
+        let doc = sample_document();
+        let bytes = serialize_project(&doc).expect("save");
+        let archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+        assert!(archive.file_names().all(|n| n != RIG));
+    }
+
+    #[test]
+    fn a_damaged_rig_is_reported_not_dropped() {
+        use aether_document::rig::Parameter;
+        let mut doc = sample_document();
+        let id = doc.ids.parameter();
+        doc.rig
+            .add_parameter(Parameter::new(id, "AngleX", -30.0, 30.0, 0.0))
+            .expect("param");
+        let bytes = serialize_project(&doc).expect("save");
+        // Rewrite the archive with a corrupted rig.json.
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+        let mut out = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut out);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            for i in 0..archive.len() {
+                let mut entry = archive.by_index(i).expect("entry");
+                let name = entry.name().to_string();
+                let mut data = Vec::new();
+                entry.read_to_end(&mut data).expect("read");
+                if name == RIG {
+                    data = b"{ not json".to_vec();
+                }
+                writer.start_file(&name, options).expect("start");
+                writer.write_all(&data).expect("write");
+            }
+            writer.finish().expect("finish");
+        }
+        let err = deserialize_project(&out.into_inner()).expect_err("corrupt rig");
+        assert!(err.to_string().contains("rig.json"), "{err}");
     }
 }

@@ -60,6 +60,11 @@ pub enum AetherError {
     /// A caller passed arguments that cannot be honoured.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// A rig (parameters, deformers, bones, physics, motions) is inconsistent
+    /// or an edit to it cannot be performed.
+    #[error("rig error: {0}")]
+    Rig(String),
 }
 
 impl AetherError {
@@ -86,5 +91,10 @@ impl AetherError {
     /// Build a [`AetherError::InvalidArgument`] from anything printable.
     pub fn invalid(msg: impl fmt::Display) -> Self {
         Self::InvalidArgument(msg.to_string())
+    }
+
+    /// Build a [`AetherError::Rig`] from anything printable.
+    pub fn rig(msg: impl fmt::Display) -> Self {
+        Self::Rig(msg.to_string())
     }
 }
