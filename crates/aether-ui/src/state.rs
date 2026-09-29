@@ -190,6 +190,8 @@ pub struct EditorState {
     pub archive_choice: Option<crate::library::ArchiveChoice>,
     /// A file being opened on a worker thread.
     pub pending_open: Option<crate::library::PendingOpen>,
+    /// The tutorials window.
+    pub tutorial: crate::tutorial::TutorialState,
 }
 
 /// What an export did, for the report window.
@@ -244,6 +246,7 @@ impl EditorState {
             library: Default::default(),
             archive_choice: None,
             pending_open: None,
+            tutorial: Default::default(),
         }
     }
 

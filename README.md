@@ -158,6 +158,9 @@ Photo: NASA, public domain.*
 - English and Japanese (a system CJK font is picked up automatically), with
   no UI strings hard-coded in widget code
 - Fully rebindable keyboard shortcuts with conflict detection
+- **Tutorials** (Help › *Tutorials…*), in English and Japanese: short guided
+  tours of painting, rigging a PSD, animating, Live2D and exporting; each
+  step notices when it is done, and *Show me* does it for you
 
 ## Building and running
 
@@ -243,6 +246,10 @@ docs/               architecture notes and the file-format specification
 
 ## Documentation
 
+- [docs/GUIDE.md](docs/GUIDE.md) — the user guide, task by task: painting,
+  PSDs and ZIPs, rigging, animation, Live2D and VTube Studio, the command
+  line, troubleshooting ([日本語](docs/GUIDE.ja.md)). In the editor, Help ›
+  *Tutorials* walks through the same steps.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit together and why
 - [ROADMAP.md](ROADMAP.md) — what is built, what is next
 - [CONTRIBUTING.md](CONTRIBUTING.md) — conventions and expectations

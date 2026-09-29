@@ -282,6 +282,7 @@ pub fn library_window(state: &mut EditorState, ctx: &egui::Context) {
     let mut choose_folder = false;
     let mut rescan = false;
     egui::Window::new(lang.tr("library.title"))
+        .id(egui::Id::new("sample-library"))
         .default_width(560.0)
         .default_height(480.0)
         .open(&mut open)
@@ -389,6 +390,7 @@ pub fn archive_choice_window(state: &mut EditorState, ctx: &egui::Context) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     egui::Window::new(format!("{} — {name}", lang.tr("archive.choose")))
+        .id(egui::Id::new("archive-choice"))
         .collapsible(false)
         .default_width(480.0)
         .open(&mut open)

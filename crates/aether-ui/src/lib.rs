@@ -21,6 +21,7 @@ pub mod shortcuts;
 pub mod state;
 pub mod theme;
 pub mod tools;
+pub mod tutorial;
 
 pub use app::AetherApp;
 pub use i18n::Language;

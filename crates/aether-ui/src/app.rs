@@ -79,6 +79,8 @@ impl AetherApp {
             app.canvas
                 .set_gpu_preview(crate::gpu_preview::GpuPreview::from_render_state(render_state));
         }
+        // Point newcomers at the tutorials; opening a file says something else.
+        app.state.status = app.state.tr("tutorial.hint").to_string();
         if let Some(path) = path {
             app.open_path(path);
         }
@@ -224,6 +226,42 @@ impl AetherApp {
             if let Err(error) = self.state.export_png(path) {
                 self.state.report_error("Export", &error);
             }
+        }
+    }
+
+    /// Do a tutorial step for the user.
+    fn show_me(&mut self, help: crate::tutorial::Help) {
+        use crate::tutorial::Help;
+        let result = match help {
+            Help::Run(action) => {
+                self.run(action);
+                Ok(())
+            }
+            Help::Workspace(workspace) => {
+                self.set_workspace(workspace);
+                Ok(())
+            }
+            Help::OpenLibrary => {
+                self.state.open_sample_library();
+                Ok(())
+            }
+            Help::AutoRig => self.state.auto_rig().map(|_| ()),
+            Help::Set(name, value) => match self.state.doc.rig.parameter_named(name).map(|p| p.id) {
+                Some(id) => self.state.set_parameter_value(id, value),
+                None => Err(aether_core::AetherError::rig(format!("no parameter {name}"))),
+            },
+            Help::AddMotion => self.state.add_motion("Motion").map(|_| ()),
+            Help::ExportLive2D => {
+                self.state.export_live2d_via_dialog();
+                Ok(())
+            }
+            Help::ExportRuntime => {
+                self.state.export_runtime_model_via_dialog();
+                Ok(())
+            }
+        };
+        if let Err(error) = result {
+            self.state.report_error("Tutorial", &error);
         }
     }
 
@@ -459,6 +497,10 @@ impl AetherApp {
             });
 
             ui.menu_button(lang.tr("menu.help"), |ui| {
+                if ui.button(lang.tr("menu.help.tutorials")).clicked() {
+                    self.state.open_tutorials();
+                    ui.close();
+                }
                 if ui.button(lang.tr("menu.help.shortcuts")).clicked() {
                     self.show_shortcuts = true;
                     ui.close();
@@ -607,6 +649,9 @@ impl AetherApp {
         self.export_report_window(ctx);
         crate::library::library_window(&mut self.state, ctx);
         crate::library::archive_choice_window(&mut self.state, ctx);
+        if let Some(help) = crate::tutorial::tutorial_window(&mut self.state, ctx) {
+            self.show_me(help);
+        }
         self.shortcuts_window(ctx);
         self.close_confirmation(ctx);
     }
@@ -1079,6 +1124,32 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| app.draw(ui));
+    }
+
+    #[test]
+    fn every_tutorial_step_renders_in_both_languages() {
+        let ctx = egui::Context::default();
+        let mut app = rigged_app();
+        app.state_mut().open_tutorials();
+        for language in Language::ALL {
+            app.state_mut().language = language;
+            for (t, tutorial) in crate::tutorial::TUTORIALS.iter().enumerate() {
+                app.state_mut().start_tutorial(t);
+                for s in 0..tutorial.steps.len() {
+                    app.state_mut().go_to_step(s);
+                    frame(&mut app, &ctx, Vec::new());
+                }
+            }
+        }
+        // Show me: switching workspace goes through the app, which relays
+        // out the panels.
+        app.show_me(crate::tutorial::Help::Workspace(Workspace::Animation));
+        assert_eq!(app.state().workspace, Workspace::Animation);
+        // In rig mode a slider poses; in animate mode it would key the motion.
+        app.state_mut().rig.animate = false;
+        app.show_me(crate::tutorial::Help::Set("AngleX", 20.0));
+        let x = app.state().doc.rig.parameter_named("AngleX").unwrap().id;
+        assert_eq!(app.state().doc.rig.value(x), 20.0);
     }
 
     #[test]

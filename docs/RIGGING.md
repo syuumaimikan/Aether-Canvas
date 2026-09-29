@@ -5,6 +5,10 @@ layers that move. There is no export to a separate rigging program, no
 texture atlas to rebuild, and no re-import when you fix a stroke — repaint a
 rigged layer and the change shows through the deformation immediately.
 
+This is the reference for rigging; for a task-by-task walkthrough see the
+[user guide](GUIDE.md) ([日本語](GUIDE.ja.md)), or Help › *Tutorials* in the
+editor.
+
 ![The Rigging workspace](images/rigging-workspace.png)
 
 *The Rigging workspace: the rig hierarchy and inspector (top right), parameter
@@ -484,6 +488,7 @@ Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギ�
 * **ZIP とサンプルライブラリ**：「ファイル ▸ 開く…」で ZIP を選ぶと、中の Live2D モデル・PSD・プロジェクト・画像を展開せずに直接開けます（複数あるときは選択ウィンドウ。ZIP 内の ZIP、Windows の日本語ファイル名（Shift_JIS）にも対応）。「ファイル ▸ サンプルライブラリ…」では `assets_sample` フォルダ（作業フォルダかアプリと同じ場所、または環境変数 `AETHER_SAMPLES`）の中身を ZIP の中まで一覧し、クリックで開けます。「PSD を開いたら自動リグ」も選べます。コマンドラインでは `aether-canvas --list assets_sample` で一覧し、表示されたパス（`"assets_sample/pack.zip#runtime/model.model3.json"` など）をそのまま開く・書き出す・自動リグに使えます。
 * Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。
+* 操作の流れは [使い方ガイド](GUIDE.ja.md) にまとめてあり、アプリ内でも「ヘルプ › チュートリアル」で、お絵描き・PSD のリギング・アニメーション・Live2D・書き出しを順に体験できます（各ステップは操作が済むと自動でチェックが付き、「やってみせて」で代わりに実行できます）。
 * **ランタイム**：「ファイル ▸ ランタイムモデルを書き出し…」で model.json とテクスチャアトラスを出力し、Web（WebAssembly + WebGL、gzip 約 190 KB）、C ABI 経由のネイティブ環境、Rust で再生できます。エディタと同じリグのコードが動くため、見た目も動きもエディタと一致します（自動テストで検証済み）。PSD からは `aether-canvas --auto-rig --export-model 出力先 character.psd` の 1 コマンドで、リグ付きの再生可能なモデルになります。
 * **Godot 4 パッケージ**：`AetherModel2D` ノードを置いて model.json を指定するだけで再生できます。モーション・表情・視線追従・口パク・フェイストラッキング・当たり判定を GDScript から操作でき、クリッピングと 4 種の合成モードも含めて Godot の 3 つのレンダラーすべてでソフトウェアレンダラーと同じ絵になることを Godot 上の自動テストで確認しています（Live2D には公式の Godot パッケージがありません）。
 * **Live2D モデルの読み込みと書き出し**：「ファイル ▸ Live2D モデルを開く…」で Cubism モデル（.model3.json）を開くと、Cubism Core と同じ変形・マスク・合成で表示され（Live2D のサンプルモデルで Cubism Core 本体と照合済み）、パラメータ・パーツ・モーション・表情・物理演算をそのまま編集・再生できます。「ファイル ▸ Live2D モデルを書き出し…」では、開いた Live2D モデルを編集内容込みで書き戻せるほか、**Aether でリグを組んだキャラクターを新しい Cubism モデル（.moc3・.model3.json・物理演算・モーション・表情）として書き出し**、VTube Studio や nizima LIVE、Cubism SDK で使えます。ボーンは入れ子の回転デフォーマに変換され、スムーズ補間やスキニングはキーフォームを自動で追加して再現します。書き出し後は Cubism と同じ計算でエディタとの差を頂点ごとに検証し、近似した点を一覧で表示します（自動リグしたテストキャラクターでは誤差 1 px 未満）。物理演算は Cubism 側の設定をエディタの揺れに合わせて自動調整しますが、計算方式が異なるため完全には一致しません。PSD からは `aether-canvas --auto-rig --export-live2d 出力先 character.psd` の 1 コマンドで Cubism モデルになります。
