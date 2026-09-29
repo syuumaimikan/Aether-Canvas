@@ -24,7 +24,7 @@ use crate::physics::PhysicsGroup;
 use crate::pose::{MeshPose, RigPose};
 use crate::skeleton::{self, Bone, BoneForm, SkeletonPose};
 use aether_core::id::IdGenerator;
-use aether_core::math::Vec2;
+use aether_core::math::{Transform2D, Vec2};
 use aether_core::{AetherError, BoneId, DeformerId, LayerId, ParameterId, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -931,7 +931,33 @@ pub struct Evaluator<'a> {
     params: ResolvedParams,
     skeleton: SkeletonPose,
     deformers: BTreeMap<DeformerId, (usize, DeformerState)>,
+    rotations: BTreeMap<DeformerId, ResolvedRotation>,
     include_dynamics: bool,
+}
+
+/// A rotation deformer resolved into final space: what its children see.
+///
+/// Rotations stay rigid wherever they sit, as in Live2D Cubism. Inside other
+/// rotations and on bones this is plain composition; inside a warp, the
+/// pivot follows the warp and the rotation turns with the warp's local
+/// direction at the pivot, but is not stretched or sheared by it — so a
+/// head pivoting on a body warp moves as a whole instead of being bent by
+/// the body's lattice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedRotation {
+    /// The rest pivot, where children's coordinates are measured from.
+    pub origin: Vec2,
+    /// The pivot in final space.
+    pub pivot: Vec2,
+    /// Rotation and scale, rest space to final space.
+    pub linear: Transform2D,
+}
+
+impl ResolvedRotation {
+    /// Map a rest-space point to final space.
+    pub fn apply(&self, p: Vec2) -> Vec2 {
+        self.pivot + self.linear.apply_vector(p - self.origin)
+    }
 }
 
 impl<'a> Evaluator<'a> {
@@ -953,13 +979,130 @@ impl<'a> Evaluator<'a> {
             .enumerate()
             .map(|(i, d)| (d.id, (i, d.evaluate(&params))))
             .collect();
-        Self {
+        let mut evaluator = Self {
             rig,
             params,
             skeleton,
             deformers,
+            rotations: BTreeMap::new(),
             include_dynamics,
+        };
+        evaluator.resolve_rotations();
+        evaluator
+    }
+
+    /// Resolve every rotation into final space, parents first.
+    fn resolve_rotations(&mut self) {
+        let depth = |mut node: Option<NodeRef>| -> usize {
+            let mut d = 0;
+            while let Some(NodeRef::Deformer(id)) = node {
+                d += 1;
+                if d > 64 {
+                    break;
+                }
+                node = self.rig.deformer(id).and_then(|x| x.parent);
+            }
+            d
+        };
+        let mut order: Vec<(usize, DeformerId)> = self
+            .rig
+            .deformers
+            .iter()
+            .filter(|d| matches!(d.kind, DeformerKind::Rotation(_)))
+            .map(|d| (depth(d.parent), d.id))
+            .collect();
+        order.sort();
+        for (_, id) in order {
+            if let Some(resolved) = self.resolve_rotation(id) {
+                self.rotations.insert(id, resolved);
+            }
         }
+    }
+
+    fn resolve_rotation(&self, id: DeformerId) -> Option<ResolvedRotation> {
+        let (index, state) = self.deformers.get(&id)?;
+        let DeformerMap::Rotation(r) = &state.map else {
+            return None;
+        };
+        let own = Transform2D::scale(Vec2::new(r.scale, r.scale)).then(&Transform2D::rotation(r.angle));
+        let pivot = r.pivot();
+        let resolved = |pivot: Vec2, linear: Transform2D| ResolvedRotation {
+            origin: r.origin,
+            pivot,
+            linear,
+        };
+        let parent = self.rig.deformers[*index].parent;
+        Some(match parent {
+            None => resolved(pivot, own),
+            Some(NodeRef::Bone(b)) => {
+                let m = self
+                    .skeleton
+                    .skinning
+                    .get(&b)
+                    .copied()
+                    .unwrap_or(Transform2D::IDENTITY);
+                let linear = Transform2D {
+                    tx: 0.0,
+                    ty: 0.0,
+                    ..m
+                };
+                resolved(m.apply(pivot), own.then(&linear))
+            }
+            Some(NodeRef::Deformer(p)) => match (self.rotations.get(&p), self.deformers.get(&p)) {
+                (Some(up), _) => resolved(up.apply(pivot), own.then(&up.linear)),
+                (
+                    None,
+                    Some((
+                        _,
+                        DeformerState {
+                            map: DeformerMap::Warp(w),
+                            ..
+                        },
+                    )),
+                ) => {
+                    // Follow the warp's turn at the pivot (the direction a
+                    // short upward step there ends up pointing, as Cubism
+                    // measures it), and the scale of the rotations above.
+                    let moved = self.map(parent, pivot);
+                    let h = (w.rect.height() * 0.1).max(1e-3);
+                    let up = self.map(parent, pivot - Vec2::new(0.0, h)) - moved;
+                    let turn = if up.length_squared() > 1e-12 {
+                        up.y.atan2(up.x) + std::f32::consts::FRAC_PI_2
+                    } else {
+                        0.0
+                    };
+                    let scale = self.scale_above(p);
+                    let linear = own
+                        .then(&Transform2D::rotation(turn))
+                        .then(&Transform2D::scale(Vec2::new(scale, scale)));
+                    resolved(moved, linear)
+                }
+                _ => resolved(pivot, own),
+            },
+        })
+    }
+
+    /// The combined scale of the nearest rotation above deformer `id`
+    /// (warps pass scale through unchanged).
+    fn scale_above(&self, id: DeformerId) -> f32 {
+        let mut node = self.rig.deformer(id).and_then(|d| d.parent);
+        let mut steps = 0;
+        while let Some(NodeRef::Deformer(p)) = node {
+            steps += 1;
+            if steps > 64 {
+                break;
+            }
+            if let Some(r) = self.rotations.get(&p) {
+                return r.linear.determinant().abs().sqrt();
+            }
+            node = self.rig.deformer(p).and_then(|d| d.parent);
+        }
+        1.0
+    }
+
+    /// A rotation deformer resolved into final space.
+    pub fn resolved_rotation(&self, id: DeformerId) -> Option<&ResolvedRotation> {
+        self.rotations.get(&id)
     }
 
     /// The resolved parameter values.
@@ -989,6 +1132,10 @@ impl<'a> Evaluator<'a> {
             }
             match n {
                 NodeRef::Deformer(id) => {
+                    // A resolved rotation lands in final space directly.
+                    if let Some(r) = self.rotations.get(&id) {
+                        return r.apply(p);
+                    }
                     let Some((index, state)) = self.deformers.get(&id) else {
                         break;
                     };
@@ -1108,10 +1255,16 @@ impl<'a> Evaluator<'a> {
         let parent = self.rig.deformers[*index].parent;
         match &state.map {
             DeformerMap::Warp(w) => w.points().into_iter().map(|p| self.map(parent, p)).collect(),
-            DeformerMap::Rotation(r) => {
-                let arm = r.pivot() + Vec2::new(40.0 * r.scale, 0.0).rotated(r.angle);
-                vec![self.map(parent, r.pivot()), self.map(parent, arm)]
-            }
+            DeformerMap::Rotation(r) => match self.rotations.get(&id) {
+                Some(resolved) => {
+                    let arm = r.origin + Vec2::new(40.0, 0.0);
+                    vec![resolved.pivot, resolved.apply(arm)]
+                }
+                None => {
+                    let arm = r.pivot() + Vec2::new(40.0 * r.scale, 0.0).rotated(r.angle);
+                    vec![self.map(parent, r.pivot()), self.map(parent, arm)]
+                }
+            },
         }
     }
 
@@ -1244,6 +1397,49 @@ mod tests {
         let pose = rig.evaluate();
         let p = pose.meshes[&LayerId(500)].positions[0];
         assert!((p.x - 5.0).abs() < 1e-4, "halfway to the key: {p:?}");
+    }
+
+    #[test]
+    fn rotations_inside_warps_stay_rigid() {
+        // A warp whose top edge stretches apart as it shifts right, holding
+        // a pivot near its bottom that carries the mesh.
+        let (mut rig, ids) = rig_with_mesh();
+        let x = param(&rig, "AngleX");
+        let warp = ids.deformer();
+        let mut w = Deformer::warp(
+            warp,
+            "Body",
+            Rect::from_corners(vec2(0.0, 0.0), vec2(200.0, 200.0)),
+            2,
+            2,
+        );
+        if let DeformerKind::Warp(ref mut lattice) = w.kind {
+            lattice.smooth = false;
+        }
+        rig.deformers.push(w);
+        let pivot = ids.deformer();
+        rig.deformers
+            .push(Deformer::rotation(pivot, "Neck", vec2(50.0, 190.0)));
+        rig.set_parent(RigNode::Deformer(pivot), Some(NodeRef::Deformer(warp)))
+            .expect("parent");
+        rig.set_parent(RigNode::Mesh(LayerId(500)), Some(NodeRef::Deformer(pivot)))
+            .expect("parent");
+        rig.bind_parameter(RigNode::Deformer(warp), x, &[0.0, 30.0])
+            .expect("bind");
+        rig.set_value(x, 30.0);
+        let form = rig.warp_form_mut(warp, None).expect("on key");
+        for (i, o) in form.offsets.iter_mut().enumerate() {
+            let (col, row) = (i % 3, i / 3);
+            *o = vec2(10.0 + if row == 0 { (col as f32 - 1.0) * 30.0 } else { 0.0 }, 0.0);
+        }
+        let pose = rig.evaluate();
+        let p = &pose.meshes[&LayerId(500)].positions;
+        // The pivot moved with the warp where it sits (10 px right, no
+        // turn there), and the mesh came along whole: not pulled by the
+        // stretched top edge it lies beside.
+        assert!(p[0].distance(vec2(10.0, 0.0)) < 1e-3, "{p:?}");
+        assert!((p[0].distance(p[1]) - 100.0).abs() < 1e-3, "{p:?}");
+        assert!((p[0].distance(p[2]) - 100.0 * 2f32.sqrt()).abs() < 1e-3, "{p:?}");
     }
 
     #[test]
