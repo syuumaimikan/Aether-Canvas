@@ -6,6 +6,9 @@ use aether_core::color::Rgba8;
 use aether_core::math::IRect;
 use aether_document::Document;
 
+/// A face to show: its name, the parameter values and an expression.
+type Face<'a> = (String, Vec<(&'a str, f32)>, Option<usize>);
+
 fn posed(doc: &Document, values: &[(&str, f32)], expression: Option<usize>) -> Document {
     let mut d = doc.clone();
     // Show the pose as keyed: no driver adds to the parameters.
@@ -63,7 +66,7 @@ fn main() -> aether_core::Result<()> {
     aether_io::save_png(&sheet, out.join("luna-poses.png"))?;
 
     let face = IRect::new(392, 90, 272, 200);
-    let mut faces: Vec<(String, Vec<(&str, f32)>, Option<usize>)> = vec![
+    let mut faces: Vec<Face> = vec![
         ("rest".into(), vec![], None),
         (
             "blink half".into(),
@@ -89,6 +92,18 @@ fn main() -> aether_core::Result<()> {
     }
     let (sheet, _) = aether_io::animation::pack_sprite_sheet(&tiles, Some(4))?;
     aether_io::save_png(&sheet, out.join("luna-faces.png"))?;
+
+    // The head turned every way: the face keeps its shape.
+    let head = IRect::new(360, 40, 340, 320);
+    let mut tiles = Vec::new();
+    for y in [30.0, 0.0, -30.0] {
+        for x in [-30.0, 0.0, 30.0] {
+            let image = render(&posed(&doc, &[("AngleX", x), ("AngleY", y)], None)).copy_rect(head);
+            tiles.push(image);
+        }
+    }
+    let (sheet, _) = aether_io::animation::pack_sprite_sheet(&tiles, Some(3))?;
+    aether_io::save_png(&sheet, out.join("luna-turns.png"))?;
 
     // The eyes up close.
     let eyes = IRect::new(440, 160, 170, 70);

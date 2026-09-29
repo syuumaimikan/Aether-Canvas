@@ -180,7 +180,7 @@ brightness estimate separating open and spread vowels).
 | Generator | What it saves |
 | --- | --- |
 | **Auto rig** | A whole rig from layer names (below) |
-| **3D head turn** | The 3×3 keyforms of a face warp, from an ellipsoid turned in 3D: the middle of the face travels further than the silhouette, the far side compresses — parallax, fold-free up to ~40° |
+| **3D head turn** | The 3×3 keyforms of a face warp, from a skull shaped from the face and turned in 3D: the middle of the face travels further than the outline, the far side compresses, the chin comes along with the features and nodding pivots on the neck, so the face keeps its length — fold-free up to ~50°. The auto rig adds depth layers on top: the features and the fringe stand in front of the face and move a little further, the back hair behind the head moves the other way |
 | **Sway** | A pendulum bend keyed on any parameter (hair, ribbons, tails), anchored at any edge |
 | **Close** | A collapse onto a line at the parameter's minimum (eyelids, mouths) |
 | **Mirror key** | The opposite key's shape, mirrored, matched vertex-by-vertex even on asymmetric meshes |
@@ -447,7 +447,7 @@ of where each stands.
 | Meshes | Automatic from alpha with a **coverage guarantee**; **re-meshing keeps keyforms**, skin and jiggle weights; manual editing | Automatic and manual meshing |
 | Keyform grid | **Any number of parameters**, linear or **smooth (C1) interpolation**, cyclic parameters, additive blend shapes | Multi-parameter keyforms (linear), blend shapes |
 | Deformers | Warp (**bicubic** or bilinear) and rotation (rigid, as in Cubism), nested; **drag mapping through deformed parents** | Warp (Bézier) and rotation, nested |
-| Head turn | **Generated 3D ellipsoid turn**, fold-free, 3×3 keys with smooth interpolation | Manual keyforms or face-motion generation |
+| Head turn | **Generated 3D turn of a face-shaped skull**, with depth layers (features, fringe, back hair), fold-free, 3×3 keys with smooth interpolation | Manual keyforms or face-motion generation |
 | Bones | **Skeleton with FK, analytic two-bone IK, CCD IK, linear blend skinning, automatic weights** | No skeletal bones or IK |
 | Per-key appearance | Opacity, multiply and screen tint, draw order | Opacity, multiply and screen tint, draw order |
 | Glue | Yes | Yes |
@@ -484,7 +484,7 @@ authored.
 Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギング／アニメーション機能を備えています。
 
 * **PSD を開く → ✨自動リグ → スライダーで確認 → 変形ツールで調整 → タイムラインでアニメーション → GIF／APNG（フルカラー・半透明対応）／PNG 連番／スプライトシート書き出し**、がすべて一つのアプリで完結します。Web プレイヤーからは透過対応の WebM 動画も録画できます。
-* **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（3D 楕円体による自動生成）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。Live2D のサンプルのような**素材分け PSD** にも対応し、「前髪/線」のようにフォルダ名から役割を判断、「腕A_L／腕B_L」の差分は `Variant` パラメータで切り替え、両目にまたがるレイヤーは頂点ごとに近い方の目に追従、下まつげ・二重線・クリッピング用レイヤーも適切に動かし、原画や背景はリグから外します。レイヤーマスクやフォルダのマスクは、動かしたパーツと一緒に移動します（顔の輪郭をマスクで整えた PSD でも、振り向いたときに穴が開きません）。
+* **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（顔の形から作った頭を 3D で回す自動生成。目鼻口と前髪は顔より手前、後ろ髪は奥として奥行きの差で動くので、斜め顔でも顎が付いてきて顔が歪みません）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。Live2D のサンプルのような**素材分け PSD** にも対応し、「前髪/線」のようにフォルダ名から役割を判断、「腕A_L／腕B_L」の差分は `Variant` パラメータで切り替え、両目にまたがるレイヤーは頂点ごとに近い方の目に追従、下まつげ・二重線・クリッピング用レイヤーも適切に動かし、原画や背景はリグから外します。レイヤーマスクやフォルダのマスクは、動かしたパーツと一緒に移動します（顔の輪郭をマスクで整えた PSD でも、振り向いたときに穴が開きません）。
 * **ZIP とサンプルライブラリ**：「ファイル ▸ 開く…」で ZIP を選ぶと、中の Live2D モデル・PSD・プロジェクト・画像を展開せずに直接開けます（複数あるときは選択ウィンドウ。ZIP 内の ZIP、Windows の日本語ファイル名（Shift_JIS）にも対応）。「ファイル ▸ サンプルライブラリ…」では `assets_sample` フォルダ（作業フォルダかアプリと同じ場所、または環境変数 `AETHER_SAMPLES`）の中身を ZIP の中まで一覧し、クリックで開けます。「PSD を開いたら自動リグ」も選べます。コマンドラインでは `aether-canvas --list assets_sample` で一覧し、表示されたパス（`"assets_sample/pack.zip#runtime/model.model3.json"` など）をそのまま開く・書き出す・自動リグに使えます。
 * Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。

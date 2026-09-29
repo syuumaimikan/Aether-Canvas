@@ -1,11 +1,14 @@
 //! Rig generators: the one-click steps that save hours of manual keying.
 //!
 //! * [`head_turn`] fills a warp deformer's keyforms for horizontal and
-//!   vertical head angles by projecting its lattice onto an ellipsoid,
-//!   rotating it in 3D and projecting back. Features near the middle of the
-//!   face travel further than the silhouette, and the far side compresses —
-//!   the parallax that sells a 2D head turn — for a 3×3 grid of keys that
-//!   would otherwise be nine hand-shaped keyforms.
+//!   vertical head angles from a [`HeadShape`]: a skull whose front is the
+//!   face. Each lattice point is given the depth of the head there, turned
+//!   in 3D and put back on the picture, so the middle of the face travels
+//!   further than the cheeks, the far side compresses, the chin comes along
+//!   with the features and nodding pivots on the neck — for a 3×3 grid of
+//!   keys that would otherwise be nine hand-shaped keyforms. [`key_turn`]
+//!   does the same for any rule, which is how parts that stand in front of
+//!   the face or behind the head get their parallax.
 //! * [`wrap_in_warp`] puts meshes into a new warp deformer sized to them.
 //! * [`standard_physics`] adds hair-sway groups wired to the standard
 //!   parameters.
@@ -26,68 +29,225 @@ use serde::{Deserialize, Serialize};
 
 /// Knobs for [`head_turn`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HeadTurnOptions {
     /// Visual yaw at the ends of the horizontal parameter, degrees.
     pub yaw: f32,
     /// Visual pitch at the ends of the vertical parameter, degrees.
     pub pitch: f32,
-    /// How rounded the head is: 0 is a flat card, 1 a full dome.
+    /// How far the face stands out of the head's outline, as a fraction of
+    /// its half-width: 0 is a flat card.
     pub depth: f32,
     /// Foreshortening strength (0 = orthographic).
     pub perspective: f32,
-    /// Centre of the head as a fraction of the lattice rectangle
-    /// (`(0.5, 0.5)` is the middle).
+    /// Where the eyes are, as a fraction of the lattice rectangle, when no
+    /// [`face`](Self::face) is given (`(0.5, 0.5)` is the middle).
     pub center: Vec2,
+    /// The face, cheek to cheek and hairline to chin, when it is known. The
+    /// lattice may reach well beyond it (hair, ears).
+    pub face: Option<Rect>,
 }
 
 impl Default for HeadTurnOptions {
     fn default() -> Self {
         Self {
-            yaw: 28.0,
-            pitch: 18.0,
+            yaw: 30.0,
+            pitch: 20.0,
             depth: 0.75,
             perspective: 0.12,
             center: Vec2::new(0.5, 0.55),
+            face: None,
         }
     }
 }
 
-/// Where a rest point of `rect` lands when the head is turned by `yaw` and
-/// `pitch` (radians).
-pub fn project_turn(p: Vec2, rect: Rect, yaw: f32, pitch: f32, options: &HeadTurnOptions) -> Vec2 {
-    let size = rect.size();
-    let center = Vec2::new(
-        rect.min.x + size.x * options.center.x,
-        rect.min.y + size.y * options.center.y,
-    );
-    let radius = Vec2::new((size.x * 0.5).max(1e-3), (size.y * 0.5).max(1e-3));
-    let u = (p.x - center.x) / radius.x;
-    let v = (p.y - center.y) / radius.y;
-    // Depth profile (1 − r²)^1.5: rounded like a head in the middle, but with
-    // zero slope at the rim. A true hemisphere (√(1 − r²)) has infinite slope
-    // there, which stretches a thin band of the lattice so violently that
-    // triangles cannot follow it and silhouettes turn jagged; this profile
-    // keeps the warp monotonic (fold-free) up to about 40° of yaw.
-    let z = options.depth.clamp(0.0, 2.0) * (1.0 - u * u - v * v).max(0.0).powf(1.5);
-    let (sa, ca) = yaw.sin_cos();
-    let (sb, cb) = pitch.sin_cos();
-    let x1 = u * ca + z * sa;
-    let z1 = -u * sa + z * ca;
-    let y2 = v * cb - z1 * sb;
-    let z2 = v * sb + z1 * cb;
-    let scale = 1.0 + options.perspective * (z2 - z);
-    Vec2::new(center.x + x1 * scale * radius.x, center.y + y2 * scale * radius.y)
+impl HeadTurnOptions {
+    /// The head these options describe, for a lattice over `rect`: the
+    /// given face, or one guessed from the rectangle and
+    /// [`center`](Self::center).
+    pub fn shape(&self, rect: Rect) -> HeadShape {
+        let face = self.face.unwrap_or_else(|| {
+            let size = rect.size();
+            let eyes = Vec2::new(
+                rect.min.x + size.x * self.center.x.clamp(0.0, 1.0),
+                rect.min.y + size.y * self.center.y.clamp(0.0, 1.0),
+            );
+            let half = Vec2::new(size.x * 0.4, size.y * 0.31);
+            Rect::from_corners(eyes - half, eyes + half)
+        });
+        HeadShape {
+            face,
+            crown: self
+                .face
+                .map(|f| f.min.y - 0.3 * f.height())
+                .unwrap_or(rect.min.y + 0.05 * rect.height()),
+            depth: self.depth,
+            perspective: self.perspective,
+        }
+    }
+}
+
+/// A head, as [`HeadShape::turn`] moves it: a skull whose front is the face.
+///
+/// The face stands out of the plane of the head's outline by
+/// [`depth`](Self::depth) × its half-width at the middle, curving back to
+/// nothing at the cheeks' edges. It keeps most of that depth down to the
+/// chin, which juts forward of the neck, and above the hairline the skull
+/// curves back to the crown. The head yaws about the vertical line through
+/// the middle of the face and nods about the top of the neck, below and
+/// behind the eyes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeadShape {
+    /// The face: cheek to cheek, hairline to chin.
+    pub face: Rect,
+    /// Height of the top of the skull.
+    pub crown: f32,
+    /// How far the middle of the face stands out of the head's outline, as
+    /// a fraction of the face's half-width.
+    pub depth: f32,
+    /// Foreshortening strength (0 = orthographic).
+    pub perspective: f32,
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+impl HeadShape {
+    /// A head around `face` (cheek to cheek, hairline to chin), with the
+    /// crown a little above the hairline.
+    pub fn around(face: Rect) -> Self {
+        let options = HeadTurnOptions {
+            face: Some(face),
+            ..Default::default()
+        };
+        options.shape(face)
+    }
+
+    fn half_width(&self) -> f32 {
+        (self.face.width() * 0.5).max(1.0)
+    }
+
+    fn height(&self) -> f32 {
+        self.face.height().max(1.0)
+    }
+
+    /// Where the eyes are: the centre of the face.
+    pub fn centre(&self) -> Vec2 {
+        Vec2::new(self.face.center().x, self.face.min.y + 0.5 * self.height())
+    }
+
+    /// How far the head's surface at `p` stands toward the viewer, in
+    /// pixels, from the plane of its outline.
+    pub fn surface(&self, p: Vec2) -> f32 {
+        let rx = self.half_width();
+        let h = self.height();
+        let u = (p.x - self.face.center().x) / (rx * 1.08);
+        // (1 − u²)^1.5 across: round in the middle, with zero slope at the
+        // edge, which keeps the lattice from folding up to about 50° of yaw.
+        let across = (1.0 - u * u).max(0.0).powf(1.5);
+        let top = self.crown.min(self.face.min.y - 1.0);
+        let down = smoothstep(top, self.face.min.y + 0.35 * h, p.y)
+            * (1.0 - smoothstep(self.face.max.y - 0.15 * h, self.face.max.y + 0.3 * h, p.y));
+        self.depth.max(0.0) * rx * across * down
+    }
+
+    /// How firmly `p` goes with the head: 1 on it, fading to 0 a little
+    /// over a face's width away (the ends of long hair stay where they are).
+    pub fn attachment(&self, p: Vec2) -> f32 {
+        let rx = self.half_width();
+        let h = self.height();
+        let c = self.face.center().x;
+        let outside = Vec2::new(
+            ((p.x - c).abs() - rx * 1.1).max(0.0),
+            (self.crown - p.y).max(0.0).max(p.y - (self.face.max.y + 0.3 * h)),
+        )
+        .length();
+        1.0 - smoothstep(0.0, 2.4 * rx, outside)
+    }
+
+    /// Where the point at rest position `p`, standing `z` pixels toward the
+    /// viewer from the plane of the head's outline, goes when the head turns
+    /// by `yaw` (positive: the face moves right) and `pitch` (positive:
+    /// looking up), in radians.
+    pub fn turn(&self, p: Vec2, z: f32, yaw: f32, pitch: f32) -> Vec2 {
+        let rx = self.half_width();
+        let h = self.height();
+        let cx = self.face.center().x;
+        // The top of the neck, which the head nods on.
+        let pivot_y = self.face.min.y + 0.7 * h;
+        let pivot_z = -0.15 * rx;
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = pitch.sin_cos();
+        let x = p.x - cx;
+        let y = p.y - pivot_y;
+        // Yaw shears by depth, so the outline stays where it is drawn: its
+        // far side cannot show what was hidden behind it anyway.
+        let x1 = x + z * sy;
+        let z1 = z * cy - x * sy;
+        let zn = z1 - pivot_z;
+        let y2 = y * cp - zn * sp;
+        let z2 = y * sp + zn * cp + pivot_z;
+        let moved = Vec2::new(cx + x1, pivot_y + y2);
+        // What comes nearer grows a little and what goes away shrinks,
+        // about the middle of the face, in proportion to how far it stands
+        // out: the outline of a round head looks the same from any side.
+        let centre = self.centre();
+        let from = moved - centre;
+        let reach = (1.3 * rx / from.length().max(1e-3)).min(1.0);
+        let standing = (z / (self.depth.max(1e-3) * rx)).clamp(0.0, 1.0);
+        let grow = self.perspective * standing * (z2 - z) / rx;
+        let moved = moved + from * (grow * reach);
+        p + (moved - p) * self.attachment(p)
+    }
+
+    /// Where the head's own surface at `p` goes.
+    pub fn turn_surface(&self, p: Vec2, yaw: f32, pitch: f32) -> Vec2 {
+        self.turn(p, self.surface(p), yaw, pitch)
+    }
+
+    /// How much further than the surface beneath it a part standing
+    /// `lift` pixels in front of the head at `p` moves — the extra keyed on
+    /// a warp nested inside the head's.
+    pub fn parallax(&self, p: Vec2, lift: f32, yaw: f32, pitch: f32) -> Vec2 {
+        let z = self.surface(p);
+        self.turn(p, z + lift, yaw, pitch) - self.turn(p, z, yaw, pitch)
+    }
 }
 
 /// Replace a warp deformer's keyforms with a generated head turn over
 /// `x_param` (yaw) and `y_param` (pitch), keyed at each parameter's minimum,
-/// default and maximum.
+/// default and maximum: the surface of [`HeadTurnOptions::shape`].
 pub fn head_turn(
     rig: &mut Rig,
     deformer: DeformerId,
     x_param: ParameterId,
     y_param: Option<ParameterId>,
     options: &HeadTurnOptions,
+) -> Result<()> {
+    let rect = match rig.deformer(deformer).map(|d| &d.kind) {
+        Some(DeformerKind::Warp(w)) => w.rect,
+        Some(_) => return Err(AetherError::rig("a head turn needs a warp deformer")),
+        None => return Err(AetherError::rig("no such deformer")),
+    };
+    let head = options.shape(rect);
+    key_turn(rig, deformer, x_param, y_param, options, |p, yaw, pitch| {
+        head.turn_surface(p, yaw, pitch)
+    })
+}
+
+/// Key a warp deformer over `x_param` (yaw) and `y_param` (pitch) at each
+/// parameter's minimum, default and maximum, moving each rest lattice point
+/// `p` to `place(p, yaw, pitch)` (radians, reaching the options' angles at
+/// the parameters' ends).
+pub fn key_turn(
+    rig: &mut Rig,
+    deformer: DeformerId,
+    x_param: ParameterId,
+    y_param: Option<ParameterId>,
+    options: &HeadTurnOptions,
+    place: impl Fn(Vec2, f32, f32) -> Vec2,
 ) -> Result<()> {
     let px = rig
         .parameter(x_param)
@@ -123,10 +283,11 @@ pub fn head_turn(
             let yaw = (nx * options.yaw).to_radians();
             // Positive vertical values look up.
             let pitch = (ny * options.pitch).to_radians();
-            let offsets = rest
-                .iter()
-                .map(|p| project_turn(*p, warp.rect, yaw, pitch, options) - *p)
-                .collect();
+            let offsets = if nx == 0.0 && ny == 0.0 {
+                vec![Vec2::ZERO; rest.len()]
+            } else {
+                rest.iter().map(|p| place(*p, yaw, pitch) - *p).collect()
+            };
             forms.push(WarpForm {
                 offsets,
                 opacity: 1.0,
@@ -502,35 +663,94 @@ mod tests {
         rig.parameter_named(name).expect("param").id
     }
 
+    /// A face 200 px wide and 260 tall, eyes at y = 230, chin at 360.
+    fn head() -> HeadShape {
+        HeadShape::around(Rect::from_corners(vec2(100.0, 100.0), vec2(300.0, 360.0)))
+    }
+
     #[test]
-    fn projection_is_the_identity_at_rest() {
-        let rect = Rect::from_corners(vec2(0.0, 0.0), vec2(100.0, 100.0));
-        let options = HeadTurnOptions::default();
-        for p in [vec2(10.0, 10.0), vec2(50.0, 55.0), vec2(90.0, 40.0)] {
-            assert!(project_turn(p, rect, 0.0, 0.0, &options).distance(p) < 1e-4);
+    fn a_head_rests_where_it_is_drawn() {
+        let head = head();
+        for p in [
+            vec2(10.0, 10.0),
+            vec2(200.0, 230.0),
+            vec2(290.0, 340.0),
+            vec2(200.0, 900.0),
+        ] {
+            assert!(head.turn_surface(p, 0.0, 0.0).distance(p) < 1e-3);
         }
     }
 
     #[test]
-    fn turning_moves_the_middle_more_than_the_edge() {
-        let rect = Rect::from_corners(vec2(0.0, 0.0), vec2(100.0, 100.0));
-        let options = HeadTurnOptions {
-            center: vec2(0.5, 0.5),
-            ..Default::default()
-        };
-        let yaw = 0.4;
-        let middle = project_turn(vec2(50.0, 50.0), rect, yaw, 0.0, &options) - vec2(50.0, 50.0);
-        let edge = project_turn(vec2(99.0, 50.0), rect, yaw, 0.0, &options) - vec2(99.0, 50.0);
+    fn turning_moves_the_face_and_leaves_its_outline() {
+        let head = head();
+        let yaw = 30f32.to_radians();
+        let moved = |p: Vec2| head.turn_surface(p, yaw, 0.0) - p;
+        let nose = moved(vec2(200.0, 270.0));
+        let chin = moved(vec2(200.0, 358.0));
+        let cheek = moved(vec2(299.0, 280.0));
+        let crown = moved(vec2(200.0, head.crown));
+        assert!(nose.x > 30.0, "the face swings toward the turn: {nose:?}");
         assert!(
-            middle.x > 10.0,
-            "the face centre swings toward the turn: {middle:?}"
+            chin.x > 0.6 * nose.x,
+            "the chin comes with the features ({chin:?} against {nose:?}) rather than shearing the face"
         );
+        assert!(cheek.x.abs() < 0.2 * nose.x, "the outline stays: {cheek:?}");
+        assert!(crown.x.abs() < 0.2 * nose.x, "and so does the crown: {crown:?}");
+        assert!(nose.y.abs() < 3.0, "a turn does not lift the face: {nose:?}");
+    }
+
+    #[test]
+    fn nodding_moves_the_chin_with_the_eyes() {
+        let head = head();
+        let eyes = vec2(200.0, 230.0);
+        let chin = vec2(200.0, 358.0);
+        let crown = vec2(200.0, head.crown + 1.0);
+        for pitch in [20f32, -20.0] {
+            let pitch = pitch.to_radians();
+            let e = head.turn_surface(eyes, 0.0, pitch);
+            let c = head.turn_surface(chin, 0.0, pitch);
+            let t = head.turn_surface(crown, 0.0, pitch);
+            let up = pitch > 0.0;
+            assert_eq!(e.y < eyes.y, up, "the eyes follow the nod: {e:?}");
+            assert_eq!(c.y < chin.y, up, "and so does the chin: {c:?}");
+            let length = c.y - e.y;
+            assert!(
+                length <= (chin.y - eyes.y) + 0.5,
+                "the lower face never stretches: {length} against {}",
+                chin.y - eyes.y
+            );
+            // Looking down shows more of the top of the head.
+            let top = e.y - t.y;
+            if up {
+                assert!(top < eyes.y - crown.y, "looking up flattens the top: {top}");
+            } else {
+                assert!(top > eyes.y - crown.y, "looking down shows the top: {top}");
+            }
+        }
+    }
+
+    #[test]
+    fn long_hair_stays_put_at_its_ends() {
+        let head = head();
+        let tip = vec2(200.0, 1000.0);
+        let root = vec2(320.0, 150.0);
+        let (yaw, pitch) = (30f32.to_radians(), 20f32.to_radians());
+        assert!(head.turn_surface(tip, yaw, pitch).distance(tip) < 1e-3);
         assert!(
-            middle.x > edge.x.abs() * 2.0,
-            "the silhouette barely moves: {edge:?}"
+            head.turn_surface(root, yaw, pitch).distance(root) > 1.0,
+            "the root goes with the head"
         );
-        let up = project_turn(vec2(50.0, 50.0), rect, 0.0, 0.3, &options);
-        assert!(up.y < 45.0, "looking up raises the centre: {up:?}");
+    }
+
+    #[test]
+    fn parts_in_front_of_the_face_move_further() {
+        let head = head();
+        let p = vec2(200.0, 230.0);
+        let extra = head.parallax(p, 20.0, 30f32.to_radians(), 0.0);
+        assert!(extra.x > 5.0, "{extra:?}");
+        let behind = head.parallax(p, -20.0, 30f32.to_radians(), 0.0);
+        assert!(behind.x < -5.0, "{behind:?}");
     }
 
     #[test]
@@ -653,22 +873,35 @@ mod tests {
 
     #[test]
     fn generated_turns_never_fold_the_lattice() {
-        // Sample a dense row through the middle and require x to keep
-        // increasing: a fold would show as x going backwards.
-        let rect = Rect::from_corners(vec2(0.0, 0.0), vec2(200.0, 200.0));
-        let options = HeadTurnOptions {
-            center: vec2(0.5, 0.5),
-            depth: 0.75,
-            ..Default::default()
-        };
-        for yaw_deg in [-38.0f32, -20.0, 20.0, 38.0] {
-            for row in [60.0, 100.0, 140.0] {
-                let mut last = f32::NEG_INFINITY;
-                for i in 0..=400 {
-                    let x = i as f32 * 0.5;
-                    let p = project_turn(vec2(x, row), rect, yaw_deg.to_radians(), 0.0, &options);
-                    assert!(p.x > last, "fold at x = {x}, yaw {yaw_deg}");
-                    last = p.x;
+        // Sample dense rows and columns and require them to keep their
+        // order: a fold would show as a coordinate going backwards.
+        let head = head();
+        for yaw_deg in [-45.0f32, -30.0, 30.0, 45.0] {
+            for pitch_deg in [-25.0f32, 0.0, 25.0] {
+                let (yaw, pitch) = (yaw_deg.to_radians(), pitch_deg.to_radians());
+                for row in [120.0, 230.0, 300.0, 360.0, 420.0] {
+                    let mut last = f32::NEG_INFINITY;
+                    for i in 0..=800 {
+                        let x = i as f32 * 0.5;
+                        let p = head.turn_surface(vec2(x, row), yaw, pitch);
+                        assert!(
+                            p.x > last,
+                            "fold at x = {x}, y = {row}, yaw {yaw_deg}, pitch {pitch_deg}"
+                        );
+                        last = p.x;
+                    }
+                }
+                for column in [120.0, 170.0, 200.0, 250.0, 290.0] {
+                    let mut last = f32::NEG_INFINITY;
+                    for i in 0..=1000 {
+                        let y = i as f32 * 0.5;
+                        let p = head.turn_surface(vec2(column, y), yaw, pitch);
+                        assert!(
+                            p.y > last,
+                            "fold at y = {y}, x = {column}, yaw {yaw_deg}, pitch {pitch_deg}"
+                        );
+                        last = p.y;
+                    }
                 }
             }
         }

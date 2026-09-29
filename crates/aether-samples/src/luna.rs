@@ -20,7 +20,7 @@
 //!   └ Hair R      the long hair on the viewer's left (HairSide)
 //!     └ Hair L    and on the right, around the arms
 //!       └ Head tilt   AngleZ, bending the neck
-//!         └ Head turn AngleX and AngleY, projected on a head-shaped dome
+//!         └ Head turn AngleX and AngleY, a skull shaped from her face
 //!           ├ Bangs   fringe and ahoge (HairFront), tassels (HairSide)
 //!           │ ├ Illustration
 //!           │ └ Hair over eyes
@@ -37,7 +37,7 @@ use aether_core::id::IdGenerator;
 use aether_core::math::{Rect, Vec2};
 use aether_core::{AetherError, DeformerId, LayerId, ParameterId, Result};
 use aether_document::layer::Layer;
-use aether_document::rig::generate::{self, HeadTurnOptions};
+use aether_document::rig::generate::{self, HeadShape};
 use aether_document::rig::{
     ArtMesh, Behaviours, Deformer, DeformerKind, Driver, KeyAxis, KeyInterpolation, KeyformGrid, MeshForm,
     NodeRef, Rig, RigNode, WarpForm,
@@ -65,8 +65,13 @@ const LAYOUT: &[u8] = include_bytes!("../assets/luna/layers/layout.json");
 const FEET: Vec2 = Vec2::new(512.0, 1490.0);
 /// The base of the neck: the head tilts about it.
 const NECK: Vec2 = Vec2::new(527.0, 300.0);
+/// The face, cheek to cheek and hairline to chin.
+const FACE: Rect = Rect {
+    min: Vec2::new(455.0, 122.0),
+    max: Vec2::new(595.0, 264.0),
+};
 /// The middle of the face.
-const FACE_X: f32 = 527.0;
+const FACE_X: f32 = 525.0;
 /// Shoulder and hand on the viewer's left (her right) and right (her left).
 const ARM_R: (Vec2, Vec2) = (Vec2::new(330.0, 430.0), Vec2::new(157.0, 667.0));
 const ARM_L: (Vec2, Vec2) = (Vec2::new(694.0, 430.0), Vec2::new(888.0, 685.0));
@@ -708,30 +713,24 @@ pub fn rig(doc: &mut Document, parts: &Parts) -> Result<()> {
         },
     )?;
 
-    // The head turns on a dome the size of the head, fading out by the
-    // chin and the sides so the neck and shoulders stay.
-    let dome = Rect::from_corners(Vec2::new(FACE_X - 135.0, 30.0), Vec2::new(FACE_X + 135.0, 330.0));
-    let turn_options = HeadTurnOptions {
-        depth: 0.8,
-        perspective: 0.12,
-        center: Vec2::new(0.5, 0.5),
-        ..Default::default()
-    };
+    // The head turns on a skull shaped from her face, fading out below the
+    // chin and past the hair at the sides so the neck and shoulders stay.
+    let head = HeadShape::around(FACE);
     let turn = add_warp(
         rig,
         ids,
         "Head turn",
         Rect::from_corners(Vec2::new(300.0, -40.0), Vec2::new(760.0, 360.0)),
-        (12, 10),
+        (16, 14),
         Some(tilt),
         &[(angle_x, ANGLE), (angle_y, ANGLE)],
         KeyInterpolation::Smooth,
         |p, v| {
-            let w = (1.0 - smoothstep(255.0, 330.0, p.y))
-                * (1.0 - smoothstep(160.0, 225.0, (p.x - FACE_X).abs()));
-            let yaw = (v[0] / 30.0 * 18.0).to_radians();
-            let pitch = (v[1] / 30.0 * 12.0).to_radians();
-            (generate::project_turn(p, dome, yaw, pitch, &turn_options) - p) * w
+            let w = (1.0 - smoothstep(262.0, 335.0, p.y))
+                * (1.0 - smoothstep(165.0, 225.0, (p.x - FACE.center().x).abs()));
+            let yaw = (v[0] / 30.0 * 30.0).to_radians();
+            let pitch = (v[1] / 30.0 * 20.0).to_radians();
+            (head.turn_surface(p, yaw, pitch) - p) * w
         },
     )?;
 

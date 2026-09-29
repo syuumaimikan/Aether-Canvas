@@ -441,6 +441,38 @@ pub struct AutoRigReport {
     pub physics: usize,
 }
 
+/// The face, cheek to cheek and hairline to chin: the face skin when there
+/// is one, otherwise a face grown around the features (brows to mouth).
+fn face_rect(roles: &[(Role, &PartInfo)], fallback: Rect) -> Rect {
+    let of =
+        |pick: &dyn Fn(Role) -> bool| union(roles.iter().filter(|(r, _)| pick(*r)).map(|(_, p)| p.bounds));
+    if let Some(face) = of(&|r| r == Role::Face) {
+        return face;
+    }
+    let features = of(&|r| {
+        matches!(
+            r,
+            Role::EyeWhite
+                | Role::Iris
+                | Role::Lash
+                | Role::Brow
+                | Role::Nose
+                | Role::Mouth
+                | Role::MouthOpen
+        )
+    });
+    match features {
+        Some(f) => {
+            let (w, h) = (f.width().max(1.0), f.height().max(1.0));
+            Rect::from_corners(
+                Vec2::new(f.min.x - 0.3 * w, f.min.y - 0.6 * h),
+                Vec2::new(f.max.x + 0.3 * w, f.max.y + 0.7 * h),
+            )
+        }
+        None => fallback,
+    }
+}
+
 fn union(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
     rects.into_iter().reduce(|a, b| a.union(&b))
 }
@@ -621,12 +653,15 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
     let face_w = face_bounds.width().max(1.0);
     let face_h = face_bounds.height().max(1.0);
 
-    // Accessories near the head swing with it; others hang off the body.
-    // Unrecognised parts on the face go with the head.
+    // Accessories on the head (hair ornaments, earrings) swing with it;
+    // others (a tie, a brooch) hang off the body, however long the hair
+    // around them. Unrecognised parts on the face go with the head.
+    let face_rect = face_rect(&roles, face_bounds);
     let head_region = union(head_parts.iter().map(|p| p.bounds)).unwrap_or(face_bounds);
+    let on_head = |p: Vec2| head_region.contains(p) && p.y < face_rect.max.y;
     let in_head = |role: Role, part: &PartInfo| {
         role.is_head()
-            || (role == Role::Accessory && head_region.contains(part.bounds.center()))
+            || (role == Role::Accessory && on_head(part.bounds.center()))
             || (role == Role::Unknown && face_bounds.contains(part.bounds.center()))
     };
     let head_layers: Vec<LayerId> = roles
@@ -640,29 +675,119 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
         .map(|(_, p)| p.layer)
         .collect();
 
-    // Hierarchy: [Body tilt ⊃ Body ⊃] Neck ⊃ Head ⊃ head parts.
-    let head = generate::wrap_in_warp(rig, ids, &head_layers, "Head", (8, 8), 16.0)?;
-    let neck_pivot = Vec2::new(face_center.x, face_bounds.max.y);
-    let neck = generate::wrap_in_rotation(rig, ids, &[RigNode::Deformer(head)], "Neck", neck_pivot)?;
-    report.deformers += 2;
-    let head_rect = match rig.deformer(head).map(|d| &d.kind) {
-        Some(DeformerKind::Warp(w)) => w.rect,
-        _ => face_bounds,
+    // Hierarchy: [Body tilt ⊃ Body ⊃] Neck ⊃ { Back hair, Head ⊃ { Face,
+    // Bangs } }. The head turns on a skull shaped from the face; what stands
+    // in front of it (the features, the fringe) moves a little further, and
+    // the back hair, behind it, the other way.
+    let layers_with = |pick: &dyn Fn(Role) -> bool| -> Vec<LayerId> {
+        roles
+            .iter()
+            .filter(|(r, p)| in_head(*r, p) && pick(*r))
+            .map(|(_, p)| p.layer)
+            .collect()
     };
-    let turn = HeadTurnOptions {
-        center: Vec2::new(
-            ((face_center.x - head_rect.min.x) / head_rect.width().max(1.0)).clamp(0.2, 0.8),
-            ((face_center.y - head_rect.min.y) / head_rect.height().max(1.0)).clamp(0.2, 0.8),
-        ),
+    let back_hair = layers_with(&|r| r == Role::HairBack);
+    let head_layers: Vec<LayerId> = head_layers
+        .into_iter()
+        .filter(|l| !back_hair.contains(l))
+        .collect();
+    let head_layers = if head_layers.is_empty() {
+        back_hair.clone()
+    } else {
+        head_layers
+    };
+    let back_hair: Vec<LayerId> = back_hair
+        .into_iter()
+        .filter(|l| !head_layers.contains(l))
+        .collect();
+    let features = layers_with(&|r| {
+        matches!(
+            r,
+            Role::EyeWhite
+                | Role::Iris
+                | Role::Lash
+                | Role::Brow
+                | Role::Nose
+                | Role::Mouth
+                | Role::MouthOpen
+                | Role::Cheek
+        )
+    });
+    let fringe = layers_with(&|r| r == Role::HairFront);
+
+    let options = HeadTurnOptions {
+        face: Some(face_rect),
         ..Default::default()
     };
-    generate::head_turn(
-        rig,
-        head,
-        param(rig, "AngleX")?,
-        Some(param(rig, "AngleY")?),
-        &turn,
-    )?;
+    let shape = options.shape(face_rect);
+    let rx = (face_rect.width() * 0.5).max(1.0);
+    // Lattice cells about a seventh of the face across, so the face's
+    // curves are followed wherever the head's parts reach.
+    let cells = |rect: Rect| {
+        let cell = (face_rect.width() / 7.0).max(4.0);
+        (
+            ((rect.width() / cell).ceil() as usize).clamp(4, 24),
+            ((rect.height() / cell).ceil() as usize).clamp(4, 24),
+        )
+    };
+    let bounds_of =
+        |rig: &Rig, layers: &[LayerId]| union(layers.iter().filter_map(|l| rig.mesh(*l)).map(|m| m.bounds()));
+    let head_cells = bounds_of(rig, &head_layers)
+        .map(|b| cells(b.expanded(16.0)))
+        .unwrap_or((8, 8));
+    let head = generate::wrap_in_warp(rig, ids, &head_layers, "Head", head_cells, 16.0)?;
+    let (angle_x, angle_y) = (param(rig, "AngleX")?, param(rig, "AngleY")?);
+    generate::key_turn(rig, head, angle_x, Some(angle_y), &options, |p, yaw, pitch| {
+        shape.turn_surface(p, yaw, pitch)
+    })?;
+    report.deformers += 1;
+    if !features.is_empty() {
+        // As finely latticed as the head: Cubism carries a nested warp's
+        // lattice points, not its content, through the warp around it.
+        let cells = bounds_of(rig, &features)
+            .map(|b| cells(b.expanded(12.0)))
+            .unwrap_or((4, 4));
+        let face = generate::wrap_in_warp(rig, ids, &features, "Face", cells, 12.0)?;
+        let lift = 0.12 * rx;
+        generate::key_turn(rig, face, angle_x, Some(angle_y), &options, |p, yaw, pitch| {
+            p + shape.parallax(p, lift, yaw, pitch)
+        })?;
+        report.deformers += 1;
+    }
+    if !fringe.is_empty() {
+        let cells = bounds_of(rig, &fringe)
+            .map(|b| cells(b.expanded(12.0)))
+            .unwrap_or((5, 5));
+        let bangs = generate::wrap_in_warp(rig, ids, &fringe, "Bangs", cells, 12.0)?;
+        if let Some(b) = bounds_of(rig, &fringe) {
+            // Hanging from the top of the head: the roots stay on the
+            // skull, the ends stand clear of the forehead.
+            let lift = 0.2 * rx;
+            let (top, reach) = (b.min.y, b.height().max(1.0) * 0.45);
+            generate::key_turn(rig, bangs, angle_x, Some(angle_y), &options, |p, yaw, pitch| {
+                let t = ((p.y - top) / reach).clamp(0.0, 1.0);
+                let t = t * t * (3.0 - 2.0 * t);
+                p + shape.parallax(p, lift * t, yaw, pitch)
+            })?;
+        }
+        report.deformers += 1;
+    }
+    let mut neck_children = vec![RigNode::Deformer(head)];
+    if !back_hair.is_empty() {
+        let cells = bounds_of(rig, &back_hair)
+            .map(|b| cells(b.expanded(16.0)))
+            .unwrap_or((6, 6));
+        let back = generate::wrap_in_warp(rig, ids, &back_hair, "Back hair", cells, 16.0)?;
+        let depth = -0.25 * rx;
+        generate::key_turn(rig, back, angle_x, Some(angle_y), &options, |p, yaw, pitch| {
+            shape.turn(p, depth, yaw, pitch)
+        })?;
+        neck_children.push(RigNode::Deformer(back));
+        report.deformers += 1;
+    }
+    let neck_pivot = Vec2::new(face_center.x, face_bounds.max.y);
+    let neck = generate::wrap_in_rotation(rig, ids, &neck_children, "Neck", neck_pivot)?;
+    report.deformers += 1;
     let angle_z = param(rig, "AngleZ")?;
     rig.bind_parameter(RigNode::Deformer(neck), angle_z, &[-30.0, 0.0, 30.0])?;
     set_rotation_keys(rig, neck, [-12.0, 0.0, 12.0]);
@@ -1238,7 +1363,11 @@ mod tests {
         let report = auto_rig(&mut rig, &ids, &parts).expect("auto rig");
         rig.validate().expect("valid");
         assert_eq!(report.unrecognised, vec!["謎の模様".to_string()]);
-        assert_eq!(report.deformers, 4);
+        assert_eq!(report.deformers, 7);
+        let names: Vec<&str> = rig.deformers.iter().map(|d| d.name.as_str()).collect();
+        for name in ["Head", "Face", "Bangs", "Back hair", "Neck", "Body", "Body tilt"] {
+            assert!(names.contains(&name), "{name} in {names:?}");
+        }
         assert_eq!(report.physics, 2, "front and back hair chains");
         assert!(rig.motions.iter().any(|m| m.name == "Idle"));
         assert!(rig.behaviours.blink.enabled);
@@ -1297,6 +1426,52 @@ mod tests {
             0.0,
             "blush is hidden at rest"
         );
+    }
+
+    #[test]
+    fn a_turned_head_moves_each_part_by_its_depth() {
+        let (mut rig, ids, parts) = character();
+        auto_rig(&mut rig, &ids, &parts).expect("auto rig");
+        let centre_x = |pose: &crate::RigPose, layer: u64| {
+            let p = &pose.meshes[&LayerId(layer)].positions;
+            p.iter().map(|v| v.x).sum::<f32>() / p.len() as f32
+        };
+        let rest = rig.evaluate();
+        set(&mut rig, "AngleX", 30.0);
+        let turned = rig.evaluate();
+        let shift = |layer| centre_x(&turned, layer) - centre_x(&rest, layer);
+        let (face, eye, mouth, fringe, back) = (shift(2), shift(4), shift(11), shift(12), shift(13));
+        assert!(eye > 10.0, "the eyes turn with the head: {eye}");
+        assert!(mouth > 10.0, "and so does the mouth: {mouth}");
+        assert!(
+            eye > face && mouth > face,
+            "features move further than the face they sit on"
+        );
+        assert!(fringe > 0.0, "the fringe goes with the face: {fringe}");
+        assert!(
+            back < 0.0,
+            "the back hair, behind the head, goes the other way: {back}"
+        );
+
+        // Nodding keeps the face its length.
+        rig.reset_values();
+        let height = |pose: &crate::RigPose, layer: u64| {
+            let p = &pose.meshes[&LayerId(layer)].positions;
+            let (lo, hi) = p
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.y), hi.max(v.y)));
+            hi - lo
+        };
+        for angle in [30.0, -30.0] {
+            set(&mut rig, "AngleY", angle);
+            let nod = rig.evaluate();
+            assert!(
+                height(&nod, 2) <= height(&rest, 2) + 0.5,
+                "AngleY {angle} stretched the face from {} to {}",
+                height(&rest, 2),
+                height(&nod, 2)
+            );
+        }
     }
 
     #[test]

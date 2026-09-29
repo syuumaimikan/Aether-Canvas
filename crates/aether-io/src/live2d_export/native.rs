@@ -746,7 +746,10 @@ impl Exporter<'_> {
         let reach = self.rotation_reach(d.id);
         let probe = w.rect.height() * 0.1;
         let tolerance = self.limits.tolerance * (probe / reach.max(probe)).clamp(0.05, 1.0);
-        let factor = self.fine_factor(w, tolerance);
+        // The error of carrying adds to the warps' own, so it gets a share.
+        let factor = self
+            .fine_factor(w, tolerance)
+            .max(self.carried_factor(d, w, tolerance * 0.35));
         let (cols, rows) = (w.cols * factor, w.rows * factor);
         let size = w.rect.size();
         let rest: Vec<Vec2> = (0..=rows)
@@ -839,6 +842,74 @@ impl Exporter<'_> {
             }
         }
         reach
+    }
+
+    /// How many times finer warp `d`'s lattice must be for the warps around
+    /// it to bend it as they bend its content. Cubism carries a nested
+    /// warp's lattice points through the warps around it and interpolates
+    /// its content between them, where the editor carries every point.
+    fn carried_factor(
+        &self,
+        d: &aether_document::rig::Deformer,
+        w: &aether_document::rig::WarpDeformer,
+        tolerance: f32,
+    ) -> usize {
+        let rig = self.rig;
+        let mut around = Vec::new();
+        let mut node = d.parent;
+        let mut steps = 0;
+        while let Some(NodeRef::Deformer(p)) = node {
+            steps += 1;
+            if steps > 64 {
+                break;
+            }
+            let Some(parent) = rig.deformer(p) else { break };
+            if let DeformerKind::Warp(pw) = &parent.kind {
+                for form in &pw.keyforms.forms {
+                    around.push(aether_document::rig::deformer::WarpState {
+                        rect: pw.rect,
+                        cols: pw.cols,
+                        rows: pw.rows,
+                        smooth: pw.smooth,
+                        offsets: form.offsets.clone(),
+                    });
+                }
+            }
+            node = parent.parent;
+        }
+        if around.is_empty() {
+            return 1;
+        }
+        let size = w.rect.size();
+        for factor in 1..=8usize {
+            let (cols, rows) = (w.cols * factor, w.rows * factor);
+            if (cols + 1) * (rows + 1) > 4225 {
+                return factor.saturating_sub(1).max(1);
+            }
+            let at = |u: f32, v: f32| Vec2::new(w.rect.min.x + size.x * u, w.rect.min.y + size.y * v);
+            let mut worst = 0.0f32;
+            for ws in &around {
+                let carried = |p: Vec2| p + ws.displacement(p);
+                let lattice: Vec<Vec2> = (0..=rows)
+                    .flat_map(|j| (0..=cols).map(move |i| (i, j)))
+                    .map(|(i, j)| carried(at(i as f32 / cols as f32, j as f32 / rows as f32)))
+                    .collect();
+                for j in 0..=rows * 2 {
+                    for i in 0..=cols * 2 {
+                        if i % 2 == 0 && j % 2 == 0 {
+                            continue;
+                        }
+                        let (u, v) = (i as f32 / (cols * 2) as f32, j as f32 / (rows * 2) as f32);
+                        let e = carried(at(u, v)).distance(warp_bilinear(&lattice, cols, rows, u, v));
+                        worst = worst.max(e);
+                    }
+                }
+            }
+            if worst <= tolerance {
+                return factor;
+            }
+        }
+        8
     }
 
     fn fine_factor(&self, w: &aether_document::rig::WarpDeformer, tolerance: f32) -> usize {
