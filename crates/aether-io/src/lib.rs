@@ -25,6 +25,7 @@ pub mod animation;
 pub mod brush_io;
 pub mod image_io;
 pub mod live2d;
+pub mod live2d_export;
 pub mod live2d_model;
 pub mod project;
 pub mod psd;
