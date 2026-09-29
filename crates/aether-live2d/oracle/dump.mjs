@@ -67,6 +67,9 @@ const info = {
     maskCounts: listOf(d.maskCounts),
     masks: listOf(d.masks).map(listOf),
     parentParts: listOf(d.parentPartIndices),
+    // Blend code per drawable, for 5.3 files (the wrapper's array is twice
+    // as long as the data).
+    blendModes: d.blendModes ? listOf(d.blendModes).slice(0, d.count) : null,
     uvs: listOf(d.vertexUvs).map(listOf),
     indices: listOf(d.indices).map(listOf),
   },

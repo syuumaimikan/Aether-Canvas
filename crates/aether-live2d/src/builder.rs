@@ -164,7 +164,9 @@ pub enum MeshBlend {
     Normal,
     Add,
     Multiply,
-    /// A Cubism 5.3 colour blend code (written only to 5.3 files).
+    /// A Cubism 5.3 blend code ([`BLEND_SCREEN`](crate::moc3::BLEND_SCREEN)
+    /// and so on; the alpha blend in the second byte). Earlier versions get
+    /// the nearest of normal, add and multiply.
     Code(i32),
 }
 
@@ -564,10 +566,15 @@ impl MocBuilder {
         for (i, mesh) in self.meshes.iter().enumerate() {
             let binding = mesh_bindings[i] as i32;
             let (blend_flags, code) = match mesh.blend {
-                MeshBlend::Normal => (0, 0),
-                MeshBlend::Add => (FLAG_ADDITIVE, 2),
-                MeshBlend::Multiply => (FLAG_MULTIPLICATIVE, 1),
-                MeshBlend::Code(c) => (0, c),
+                MeshBlend::Normal => (0, BLEND_NORMAL),
+                MeshBlend::Add => (FLAG_ADDITIVE, BLEND_ADD),
+                MeshBlend::Multiply => (FLAG_MULTIPLICATIVE, BLEND_MULTIPLY),
+                // Before 5.3, the nearest of the three modes there are.
+                MeshBlend::Code(c) => match c & 0xff {
+                    BLEND_ADD_COMPATIBLE | BLEND_ADD | BLEND_ADD_GLOW => (FLAG_ADDITIVE, c),
+                    BLEND_MULTIPLY_COMPATIBLE | BLEND_MULTIPLY => (FLAG_MULTIPLICATIVE, c),
+                    _ => (0, c),
+                },
             };
             let mut flags = if version >= VERSION_53 { 0 } else { blend_flags };
             if mesh.double_sided {
@@ -598,8 +605,6 @@ impl MocBuilder {
             });
             a.mask_len.push(mesh.masks.len() as i32);
             if version >= VERSION_53 {
-                // Cubism 5.3 codes: colour blend in the low byte, alpha
-                // blend (over) in the next.
                 a.blend_mode.push(code);
             }
             for uv in &mesh.uvs {
@@ -1002,7 +1007,12 @@ mod tests {
         masked.inverted_mask = true;
         masked.blend = MeshBlend::Multiply;
         masked.double_sided = false;
+        let mut screened = masked.clone();
         b.meshes.push(masked);
+        screened.id = "Screened".into();
+        screened.masks.clear();
+        screened.blend = MeshBlend::Code(BLEND_SCREEN);
+        b.meshes.push(screened);
         b.glues.push(GlueDef {
             id: "Glue".into(),
             mesh_a: 1,

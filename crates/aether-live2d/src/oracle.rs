@@ -181,6 +181,18 @@ pub fn compare(moc: Moc, dump: &CoreDump, tolerance_px: f32) -> Comparison {
         if f32s(&d["uvs"][i]) != model.drawable_uvs(i) {
             failures.push(format!("drawable {i} uvs"));
         }
+        // Core reports blend codes only for 5.3 files, one per drawable (its
+        // JavaScript wrapper reads twice as many; the rest is not data).
+        if m.version >= crate::moc3::VERSION_53 && d["blendModes"].is_array() {
+            let modes = i64s(&d["blendModes"]);
+            let code = m.art_meshes.blend_mode[i] as i64;
+            if modes.get(i) != Some(&code) {
+                failures.push(format!(
+                    "drawable {i} blend mode {code} vs Core's {:?}",
+                    modes.get(i)
+                ));
+            }
+        }
         let idx: Vec<u16> = i64s(&d["indices"][i]).iter().map(|&x| x as u16).collect();
         if idx != model.drawable_indices(i) {
             failures.push(format!("drawable {i} indices"));
