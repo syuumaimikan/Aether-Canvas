@@ -4,6 +4,9 @@ Cargo.lock.bak
 *.aether.bak
 .DS_Store
 /out
+# Sample downloads for the editor's sample library (File ▸ Sample library…):
+# third-party characters with their own licences, kept out of the repository.
+/assets_sample/
 # Web player build outputs (runtime/web/build.sh)
 /runtime/web/aether_player.wasm
 /runtime/web/model/

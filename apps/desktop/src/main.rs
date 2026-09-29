@@ -34,6 +34,9 @@ fn main() -> ExitCode {
 
     init_logging();
 
+    if cli.list {
+        return list(cli.open.as_deref());
+    }
     if cli.export_model.is_some() && cli.export_live2d.is_some() {
         eprintln!("choose one of --export-model and --export-live2d");
         return ExitCode::FAILURE;
@@ -88,39 +91,59 @@ enum Target {
     Live2D,
 }
 
-/// Load a project, PSD, Live2D model or image as a document.
+/// Load a project, PSD, Live2D model, image, or an entry of a ZIP archive
+/// (`pack.zip#path/in/it`) as a document.
 fn load(file: &Path) -> aether_core::Result<aether_document::Document> {
-    let extension = file
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let name = file
-        .file_name()
-        .map(|n| n.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    Ok(match extension.as_str() {
-        "aether" => aether_io::load_project(file)?,
-        "psd" => aether_io::psd::load_psd_file(file)?,
-        _ if name.ends_with(".model3.json") || file.is_dir() => {
-            let opened = aether_io::live2d_model::import_live2d(file, &Default::default())?;
-            for note in &opened.notes {
-                println!("note: {note}");
+    let opened = aether_io::library::open_spec(&file.to_string_lossy(), &Default::default())?;
+    for note in &opened.notes {
+        println!("note: {note}");
+    }
+    Ok(opened.document)
+}
+
+/// `--list`: what a folder or archive holds that can be opened.
+fn list(file: Option<&Path>) -> ExitCode {
+    let root = file.map(Path::to_path_buf).unwrap_or_else(|| {
+        aether_io::library::default_sample_folders()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Path::new("assets_sample").to_path_buf())
+    });
+    let items = if aether_io::archive::is_archive(&root) {
+        match aether_io::archive::Archive::open(&root) {
+            Ok(archive) => archive
+                .entries()
+                .into_iter()
+                .map(|e| aether_io::library::LibraryItem {
+                    file: root.clone(),
+                    entry: Some(e.path),
+                    kind: e.kind,
+                    size: e.size,
+                })
+                .collect(),
+            Err(error) => {
+                eprintln!("could not read {}: {error}", root.display());
+                return ExitCode::FAILURE;
             }
-            opened.document
         }
-        _ => {
-            let pixmap = aether_io::load_image(file)?;
-            let name = file
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let mut doc = aether_document::Document::new(pixmap.width(), pixmap.height(), name);
-            if let Some(target) = doc.layers.get_mut(doc.active_layer).and_then(|l| l.pixmap_mut()) {
-                *target = pixmap;
-            }
-            doc
-        }
-    })
+    } else if root.is_dir() {
+        aether_io::library::scan_folder(&root)
+    } else {
+        eprintln!("{} is neither a folder nor a ZIP archive", root.display());
+        return ExitCode::FAILURE;
+    };
+    if items.is_empty() {
+        println!("nothing to open in {}", root.display());
+    }
+    for item in &items {
+        println!(
+            "{:<14} {:>9}  {}",
+            item.kind.label(),
+            format!("{:.1} MB", item.size as f64 / 1e6),
+            item.spec()
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// `--export-model` / `--export-live2d`: load a file, optionally auto-rig
@@ -141,6 +164,18 @@ fn export(file: Option<&Path>, dir: &Path, auto_rig: bool, target: Target) -> Ex
             );
             if !report.unrecognised.is_empty() {
                 println!("auto rig: left static: {}", report.unrecognised.join(", "));
+            }
+            if report.variant_parts > 0 {
+                println!(
+                    "auto rig: {} parts drawn as A/B alternatives switch with the Variant parameter",
+                    report.variant_parts
+                );
+            }
+            if !report.ignored.is_empty() {
+                println!(
+                    "auto rig: reference art and backgrounds left out: {}",
+                    report.ignored.join(", ")
+                );
             }
         }
         match target {

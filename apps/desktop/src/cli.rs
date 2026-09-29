@@ -23,6 +23,8 @@ pub struct Cli {
     pub export_live2d: Option<PathBuf>,
     /// Rig the file from its layer names before exporting.
     pub auto_rig: bool,
+    /// List what the folder or archive holds that can be opened, and exit.
+    pub list: bool,
     /// Arguments that were not understood.
     pub unknown: Vec<String>,
 }
@@ -36,9 +38,13 @@ USAGE:
 
 ARGS:
     <FILE>    A .aether project, a layered .psd, a Live2D .model3.json,
-              or an image to import
+              or an image to import; or a .zip holding them — name the
+              one to open as pack.zip#path/inside (see --list)
 
 OPTIONS:
+        --list [FOLDER|ZIP]     List what a folder of samples or an archive
+                                holds that can be opened (by default the
+                                assets_sample folder), then exit
         --export-model <DIR>    Write FILE as a runtime model (model.json and
                                 texture atlases) for games and the web player,
                                 then exit without opening a window
@@ -54,6 +60,8 @@ OPTIONS:
 EXAMPLE:
     aether-canvas --auto-rig --export-model web/model character.psd
     aether-canvas --auto-rig --export-live2d vtuber character.psd
+    aether-canvas --list assets_sample
+    aether-canvas \"assets_sample/haru.zip#runtime/haru.model3.json\"
 ";
 
 /// Parse arguments (excluding the executable name).
@@ -70,6 +78,7 @@ where
             "-h" | "--help" => cli.help = true,
             "-V" | "--version" => cli.version = true,
             "--auto-rig" => cli.auto_rig = true,
+            "--list" => cli.list = true,
             "--export-model" => match args.next() {
                 Some(dir) => cli.export_model = Some(PathBuf::from(dir.as_ref())),
                 None => cli.unknown.push("--export-model (needs a directory)".to_string()),
@@ -148,5 +157,15 @@ mod tests {
             Some(PathBuf::from("out"))
         );
         assert_eq!(parse(["--export-live2d"]).unknown.len(), 1);
+    }
+
+    #[test]
+    fn list_takes_an_optional_folder_or_archive() {
+        let cli = parse(["--list"]);
+        assert!(cli.list && cli.open.is_none());
+        let cli = parse(["--list", "assets_sample/haru.zip"]);
+        assert_eq!(cli.open, Some(PathBuf::from("assets_sample/haru.zip")));
+        let cli = parse(["pack.zip#runtime/haru.model3.json"]);
+        assert_eq!(cli.open, Some(PathBuf::from("pack.zip#runtime/haru.model3.json")));
     }
 }

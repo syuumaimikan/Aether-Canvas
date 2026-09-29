@@ -22,8 +22,10 @@
 //! grows through later phases.
 
 pub mod animation;
+pub mod archive;
 pub mod brush_io;
 pub mod image_io;
+pub mod library;
 pub mod live2d;
 pub mod live2d_export;
 pub mod live2d_model;

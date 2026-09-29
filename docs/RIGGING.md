@@ -203,24 +203,66 @@ Japanese and builds:
 
 | Role | Recognised names (case-insensitive, any language mix) |
 | --- | --- |
-| Face | face, head, skin · 顔, 肌, 輪郭, 頭 |
+| Face | face, head, skin, tears · 顔, 肌, 輪郭, 頭, 涙, 汗, 頬_通常 |
 | Eye white | eye white, sclera · 白目 |
-| Iris | iris, pupil, eye highlight · 瞳, 黒目, 虹彩 |
-| Lash / lid | lash, eyelid, lid · まつ毛, 睫毛, まぶた, アイライン |
+| Iris | iris, pupil, eye highlight · 瞳, 黒目, 虹彩, 目玉, 目hi |
+| Lash / lid | lash, eyelid, lid · まつ毛, 睫毛, まぶた, アイライン, 二重 |
 | Brow | brow · 眉, まゆ |
 | Mouth | mouth, lip · 口, 唇 |
 | Mouth inside | mouth open / inside / tongue / teeth · 口 開き, 舌, 歯 |
-| Cheek | cheek, blush · 頬, チーク, 赤面 |
+| Cheek | cheek, blush · 頬, チーク, 赤面, 照れ |
 | Bangs | bangs, fringe, front hair · 前髪 |
 | Side hair | side hair, sidelock · 横髪, サイド, もみあげ |
-| Back hair | back hair, ponytail, twintail · 後ろ髪, ポニー, ツイン |
-| Other hair | hair, ahoge · 髪, アホ毛 |
+| Back hair | back hair, ponytail, twintail · 後ろ髪, ポニー, ツイン, テール |
+| Other hair | hair, ahoge · 髪, アホ毛, 生え際 |
 | Accessory | ribbon, earring, tail, tie · リボン, イヤリング, ピアス, しっぽ, ネクタイ |
-| Body | body, torso, clothes, shirt, dress · 体, 胴, 服, シャツ, 制服 |
+| Body | body, torso, clothes, shirt, dress, skirt, legs · 体, 胴, 服, シャツ, 制服, 上着, 襟, インナー, スカート, 脚, スカーフ |
+| Left out | reference, sketch, background, bg · 原画, 下書き, ラフ, 背景 |
 
 Left and right come from the name (`L`, `left`, `左` …) or, failing that,
 from the part's position. Unrecognised layers are listed in the status bar
 and ride along with their folder.
+
+PSDs split into materials, as Live2D samples come, work as they are:
+
+* **Layers with generic names** (`線`, `塗り`, `影`, `Layer 3`) take the role
+  of the innermost folder that has one: `前髪/レイヤー 30` is bangs,
+  `耳R/肌` an ear. Folders that gather several kinds of part (a face, a
+  body, a whole eye, a mouth) leave their parts' own roles alone.
+* **A/B alternatives** (`腕A_L` and `腕B_L`: arms down or crossed) get a
+  `Variant` parameter: A shows at 0, B at 1.
+* A detail drawn **across both eyes** on one layer follows each eye with the
+  half nearer it; unrecognised parts **inside an eye** (clipping masks)
+  close with it, and unrecognised parts on the face turn with the head.
+* **Lower lashes** stay put while the upper lid comes down to them;
+  **double-eyelid lines** move down with the lid, above the closed line.
+* **Reference art and backgrounds** are left out of the rig — by name, or
+  an unnamed layer covering the whole picture.
+* **Layer and folder masks move with the parts they trim**: a face whose
+  outline a mask cuts keeps that outline when it turns. The editor draws
+  masks this way for every rigged layer, as the runtime model and the
+  players always have.
+
+## Samples and ZIP archives
+
+Samples usually arrive zipped — a Live2D sample download holds the runtime
+model next to the PSDs it was made from. Aether opens what is inside
+without unpacking:
+
+* **File ▸ Open…** accepts a `.zip`: its one model, PSD, project or image
+  opens straight away; when it holds several, a window asks which. Archives
+  inside archives are looked into, and Japanese file names written by
+  Windows (Shift_JIS) read correctly.
+* **File ▸ Sample library…** lists everything openable in a folder of
+  samples — loose files and the contents of every ZIP in it — with a filter
+  and one-click opening, *Auto rig PSDs when opened* included. It looks for
+  an `assets_sample` folder in the working folder or beside the application
+  (or the `AETHER_SAMPLES` environment variable); *Choose folder…* picks
+  another. Big PSDs open on a background thread.
+* From the command line, `aether-canvas --list assets_sample` prints each
+  item as a path to pass back, such as
+  `"assets_sample/pack.zip#runtime/model.model3.json"`; that path opens,
+  exports or auto-rigs like any file.
 
 ![Auto-rigged poses](images/auto-rig-poses.png)
 
@@ -438,7 +480,8 @@ authored.
 Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギング／アニメーション機能を備えています。
 
 * **PSD を開く → ✨自動リグ → スライダーで確認 → 変形ツールで調整 → タイムラインでアニメーション → GIF／APNG（フルカラー・半透明対応）／PNG 連番／スプライトシート書き出し**、がすべて一つのアプリで完結します。Web プレイヤーからは透過対応の WebM 動画も録画できます。
-* **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（3D 楕円体による自動生成）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。
+* **自動リグ**はレイヤー名（顔・白目 左・瞳・まつ毛・眉・口・頬・前髪・横髪・後ろ髪・体 など。英語名も可）から、顔の向き（3D 楕円体による自動生成）・まばたき・視線・眉・口の開閉と笑顔・頬染め・髪揺れ物理・呼吸・待機モーションまでを一度に作ります（1 回の「元に戻す」で取り消せます）。Live2D のサンプルのような**素材分け PSD** にも対応し、「前髪/線」のようにフォルダ名から役割を判断、「腕A_L／腕B_L」の差分は `Variant` パラメータで切り替え、両目にまたがるレイヤーは頂点ごとに近い方の目に追従、下まつげ・二重線・クリッピング用レイヤーも適切に動かし、原画や背景はリグから外します。レイヤーマスクやフォルダのマスクは、動かしたパーツと一緒に移動します（顔の輪郭をマスクで整えた PSD でも、振り向いたときに穴が開きません）。
+* **ZIP とサンプルライブラリ**：「ファイル ▸ 開く…」で ZIP を選ぶと、中の Live2D モデル・PSD・プロジェクト・画像を展開せずに直接開けます（複数あるときは選択ウィンドウ。ZIP 内の ZIP、Windows の日本語ファイル名（Shift_JIS）にも対応）。「ファイル ▸ サンプルライブラリ…」では `assets_sample` フォルダ（作業フォルダかアプリと同じ場所、または環境変数 `AETHER_SAMPLES`）の中身を ZIP の中まで一覧し、クリックで開けます。「PSD を開いたら自動リグ」も選べます。コマンドラインでは `aether-canvas --list assets_sample` で一覧し、表示されたパス（`"assets_sample/pack.zip#runtime/model.model3.json"` など）をそのまま開く・書き出す・自動リグに使えます。
 * Live2D と同じ「パラメータ＋キーフォーム＋ワープ／回転デフォーマ」を土台に、**ボーンと IK・式ドライバ・スムーズ補間・ブレンドシェイプ・ぷるぷる揺れ（ジグル）・フレームレート非依存の物理（風・コライダー・角度制限）・23 種の合成モード＋エフェクト**を追加しています。
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。
 * **ランタイム**：「ファイル ▸ ランタイムモデルを書き出し…」で model.json とテクスチャアトラスを出力し、Web（WebAssembly + WebGL、gzip 約 190 KB）、C ABI 経由のネイティブ環境、Rust で再生できます。エディタと同じリグのコードが動くため、見た目も動きもエディタと一致します（自動テストで検証済み）。PSD からは `aether-canvas --auto-rig --export-model 出力先 character.psd` の 1 コマンドで、リグ付きの再生可能なモデルになります。

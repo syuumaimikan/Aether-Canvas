@@ -139,6 +139,8 @@ impl AetherApp {
             .unwrap_or_default();
         let result = if extension == project::EXTENSION {
             self.state.open_project(&path)
+        } else if extension == "zip" {
+            self.state.open_archive(path.clone())
         } else if file_name.ends_with(".model3.json") || extension == "moc3" || path.is_dir() {
             // A .moc3 or a folder: the model settings file beside or in it.
             let target = if extension == "moc3" {
@@ -162,12 +164,13 @@ impl AetherApp {
     fn pick_and_open(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
-                "Aether project, Live2D model, Photoshop or image",
+                "Aether project, Live2D model, Photoshop, image or ZIP",
                 &[
                     project::EXTENSION,
                     "json",
                     "moc3",
                     "psd",
+                    "zip",
                     "png",
                     "jpg",
                     "jpeg",
@@ -181,6 +184,7 @@ impl AetherApp {
             .add_filter("Live2D model (.model3.json)", &["json", "moc3"])
             .add_filter("Photoshop", &["psd"])
             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "tiff", "bmp", "gif"])
+            .add_filter("ZIP archive", &["zip"])
             .pick_file();
         if let Some(path) = picked {
             self.open_path(path);
@@ -265,6 +269,14 @@ impl AetherApp {
                     if let Some(path) = picked {
                         self.open_path(path);
                     }
+                    ui.close();
+                }
+                if ui
+                    .button(lang.tr("menu.file.library"))
+                    .on_hover_text(lang.tr("menu.file.library_hint"))
+                    .clicked()
+                {
+                    self.state.open_sample_library();
                     ui.close();
                 }
                 ui.separator();
@@ -593,6 +605,8 @@ impl AetherApp {
         self.filter_dialog(ctx);
         self.about_window(ctx);
         self.export_report_window(ctx);
+        crate::library::library_window(&mut self.state, ctx);
+        crate::library::archive_choice_window(&mut self.state, ctx);
         self.shortcuts_window(ctx);
         self.close_confirmation(ctx);
     }
@@ -897,6 +911,23 @@ impl AetherApp {
             self.run(action);
         }
 
+        // Files dropped on the window open like File ▸ Open.
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if let Some(path) = dropped.into_iter().next() {
+            self.open_path(path);
+        }
+        // A file opening on a worker thread: keep checking until it lands.
+        self.state.poll_open();
+        if self.state.is_opening() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         // Advance physics, behaviours and playback; keep repainting while
         // anything is moving.
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
@@ -1048,6 +1079,36 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| app.draw(ui));
+    }
+
+    #[test]
+    fn the_sample_library_and_archive_picker_render() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let png = aether_io::image_io::encode_image(&aether_raster::Pixmap::new(4, 4), &Default::default())
+            .unwrap();
+        let path = dir.path().join("pack.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        for name in ["キャラ/a.png", "キャラ/b.png"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&png).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = AetherApp::with_document(Document::new(32, 32, "test"));
+        app.state_mut().set_library_folder(dir.path().to_path_buf());
+        app.state_mut().library.open = true;
+        app.state_mut().language = Language::Japanese;
+        frame(&mut app, &ctx, Vec::new());
+        app.open_path(path);
+        assert!(app.state().archive_choice.is_some());
+        frame(&mut app, &ctx, Vec::new());
+        // An empty library says so.
+        app.state_mut().archive_choice = None;
+        app.state_mut().library.filter = "nothing matches".into();
+        frame(&mut app, &ctx, Vec::new());
     }
 
     #[test]

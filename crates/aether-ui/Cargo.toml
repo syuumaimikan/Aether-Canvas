@@ -28,3 +28,4 @@ tracing.workspace = true
 [dev-dependencies]
 pollster.workspace = true
 tempfile = "3"
+zip.workspace = true

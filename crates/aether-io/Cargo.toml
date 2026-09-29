@@ -20,6 +20,7 @@ serde_json.workspace = true
 image.workspace = true
 png.workspace = true
 zip.workspace = true
+encoding_rs.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

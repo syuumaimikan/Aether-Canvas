@@ -184,6 +184,12 @@ pub struct EditorState {
     /// The result of the last export that has something to say, shown in
     /// a window until dismissed.
     pub export_report: Option<ExportReport>,
+    /// The sample library window.
+    pub library: crate::library::SampleLibrary,
+    /// An archive holding several things, waiting for a choice.
+    pub archive_choice: Option<crate::library::ArchiveChoice>,
+    /// A file being opened on a worker thread.
+    pub pending_open: Option<crate::library::PendingOpen>,
 }
 
 /// What an export did, for the report window.
@@ -235,6 +241,9 @@ impl EditorState {
             quit_requested: false,
             rig: crate::rigging::RigEditor::default(),
             export_report: None,
+            library: Default::default(),
+            archive_choice: None,
+            pending_open: None,
         }
     }
 

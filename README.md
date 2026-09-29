@@ -69,7 +69,8 @@ project, one document model and one timeline.
 - Timeline with step/linear/Bézier/ease/back/elastic/bounce/spring keys,
   layered motions with crossfades, expressions, auto-blink, breathing,
   look-at and lip sync baked from WAV
-- Rigged layers keep every blend mode, mask, clipping group and effect
+- Rigged layers keep every blend mode, mask, clipping group and effect;
+  masks move with the parts they trim
 - Export GIF, APNG (full colour, soft transparency), PNG sequences and
   sprite sheets; import and export layered PSD
 - Open Live2D Cubism models (`.model3.json`): drawn exactly as Cubism Core
@@ -136,6 +137,19 @@ Photo: NASA, public domain.*
 **Files**
 - `.aether` project format: a plain ZIP of JSON + PNG, versioned and migratable
 - Import and export PNG, JPEG, WebP, TIFF, BMP and GIF; layered PSD in and out
+- Open straight from ZIP archives — Live2D models, layered PSDs, projects and
+  images inside, archives within archives, Japanese (Shift_JIS) file names —
+  with nothing unpacked; a choice window when an archive holds several
+- **Sample library** (File ▸ *Sample library…*): everything openable in a
+  folder of samples (`assets_sample` by default), ZIPs included, one click to
+  open; PSDs can be auto-rigged as they open. From the command line:
+  `aether-canvas --list assets_sample`, then
+  `aether-canvas "assets_sample/pack.zip#runtime/model.model3.json"`
+- The auto-rigger reads part-separated PSDs as Live2D samples come: names
+  inside part folders (`前髪/線`), A/B alternatives (`腕A_L` / `腕B_L`,
+  switched by a `Variant` parameter), details drawn across both eyes, lower
+  lashes and double-eyelid lines, clipping masks; reference art and
+  backgrounds are left out
 
 **UI**
 - Dockable, splittable, tabbed panels (drag them anywhere)

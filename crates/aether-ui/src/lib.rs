@@ -14,6 +14,7 @@ pub mod fonts;
 pub mod gpu_preview;
 pub mod i18n;
 pub mod icons;
+pub mod library;
 pub mod panels;
 pub mod rigging;
 pub mod shortcuts;
