@@ -431,12 +431,22 @@ impl EditorState {
             .find(|d| d.name == "Head")
             .map(|d| RigNode::Deformer(d.id));
         let parts: usize = report.roles.iter().map(|(_, n)| n).sum();
-        self.status = format!(
+        let mut status = format!(
             "Auto rig: {parts} parts, {} deformers, {} physics chains, {} unrecognised",
             report.deformers,
             report.physics,
             report.unrecognised.len()
         );
+        if report.variant_parts > 0 {
+            status.push_str(&format!(
+                "; {} A/B parts switch with Variant",
+                report.variant_parts
+            ));
+        }
+        if !report.ignored.is_empty() {
+            status.push_str(&format!("; left out: {}", report.ignored.join(", ")));
+        }
+        self.status = status;
         Ok(report)
     }
 

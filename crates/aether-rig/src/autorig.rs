@@ -26,6 +26,7 @@ use crate::generate::{self, Anchor, HeadTurnOptions};
 use crate::keyform::KeyformGrid;
 use crate::mesh::MeshForm;
 use crate::motion::{Easing, Motion};
+use crate::param::Parameter;
 use crate::rig::{NodeRef, Rig, RigNode};
 use aether_core::id::IdGenerator;
 use aether_core::math::{Rect, Vec2};
@@ -70,6 +71,8 @@ pub enum Role {
     Body,
     /// Arms and hands.
     Arm,
+    /// Reference art (原画, sketches) and backgrounds: left out of the rig.
+    Reference,
     /// Not recognised.
     Unknown,
 }
@@ -125,6 +128,15 @@ fn has(text: &str, words: &[&str]) -> bool {
     words.iter().any(|w| text.contains(w))
 }
 
+/// `word` appears in `text` not run into other Latin letters: "hi" in
+/// "目hi上", but not in "white".
+fn has_latin_word(text: &str, word: &str) -> bool {
+    let latin = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphabetic());
+    text.match_indices(word).any(|(at, _)| {
+        !latin(text[..at].chars().next_back()) && !latin(text[at + word.len()..].chars().next())
+    })
+}
+
 /// Words split on anything that is not a letter or digit, lowercased.
 fn tokens(name: &str) -> Vec<String> {
     // Split camel case too: "EyeL" → "eye", "l".
@@ -163,13 +175,61 @@ pub fn side_of(name: &str) -> Side {
 }
 
 /// Decide a part's role from its name and the folders around it.
+///
+/// A part's own name decides first. Parts drawn in layers with generic
+/// names — "線", "塗り", "影", "Layer 3", as a PSD split into materials has
+/// them — take the role of the innermost folder that has one, so
+/// `前髪/レイヤー 30` is bangs and `耳R/肌` an ear. Folders that gather
+/// several kinds of part (a face, a body, an eye, a mouth) leave their
+/// parts' own roles alone: `顔/左目` is still an eye.
 pub fn classify(name: &str, groups: &[String]) -> Role {
+    let own = classify_name(name, groups);
+    let folder = (0..groups.len()).rev().find_map(|i| {
+        let role = classify_name(&groups[i], &groups[..i]);
+        (role != Role::Unknown).then_some(role)
+    });
+    let Some(folder) = folder else {
+        return own;
+    };
+    let keeps_own = match folder {
+        Role::Face | Role::Body | Role::Hair => own != Role::Unknown,
+        Role::EyeWhite => matches!(own, Role::EyeWhite | Role::Iris | Role::Lash),
+        Role::Mouth => matches!(own, Role::Mouth | Role::MouthOpen),
+        _ => false,
+    };
+    if keeps_own {
+        own
+    } else {
+        folder
+    }
+}
+
+/// The role a single name says.
+fn classify_name(name: &str, groups: &[String]) -> Role {
     let n = name.to_lowercase();
     let context = format!("{} {}", groups.join(" ").to_lowercase(), n);
     let eye_context = has(&context, &["eye", "目", "め"]);
     let mouth_context = has(&context, &["mouth", "口", "くち", "lip", "唇"]);
     let hair_context = has(&context, &["hair", "髪", "かみ"]);
+    let word = |words: &[&str]| tokens(name).iter().any(|t| words.contains(&t.as_str()));
 
+    if has(
+        &n,
+        &[
+            "原画",
+            "下書き",
+            "下絵",
+            "ラフ",
+            "アタリ",
+            "reference",
+            "sketch",
+            "背景",
+            "background",
+        ],
+    ) || word(&["ref", "guide", "bg"])
+    {
+        return Role::Reference;
+    }
     if has(
         &n,
         &[
@@ -183,12 +243,14 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
             "eyeline",
             "eye line",
             "lid",
+            // Double-eyelid lines and their shadows ride on the upper lid.
+            "二重",
         ],
     ) {
         return Role::Lash;
     }
-    if has(&n, &["iris", "pupil", "瞳", "黒目", "虹彩"])
-        || (eye_context && has(&n, &["highlight", "ハイライト", "hilight"]))
+    if has(&n, &["iris", "pupil", "瞳", "黒目", "虹彩", "目玉"])
+        || (eye_context && (has(&n, &["highlight", "ハイライト", "hilight"]) || has_latin_word(&n, "hi")))
     {
         return Role::Iris;
     }
@@ -217,7 +279,11 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
     if has(&n, &["mouth", "lip", "口", "唇", "くち"]) {
         return Role::Mouth;
     }
-    if has(&n, &["cheek", "blush", "頬", "ほお", "チーク", "赤面"]) {
+    if has(&n, &["cheek", "blush", "頬", "ほお", "チーク", "赤面", "照れ"]) {
+        // The cheek as normally drawn stays; only a blush fades in.
+        if has(&n, &["通常", "normal", "base"]) {
+            return Role::Face;
+        }
         return Role::Cheek;
     }
     if has(&n, &["nose", "鼻"]) {
@@ -269,12 +335,13 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
             "ツイン",
             "twintail",
             "twin tail",
+            "テール",
         ],
     ) || (hair_context && has(&n, &["back", "後", "うしろ"]))
     {
         return Role::HairBack;
     }
-    if has(&n, &["hair", "髪", "アホ毛", "ahoge", "かみ"]) {
+    if has(&n, &["hair", "髪", "アホ毛", "ahoge", "かみ", "生え際"]) {
         return Role::Hair;
     }
     if has(&n, &["neck", "首"]) {
@@ -283,7 +350,11 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
     if has(&n, &["arm", "腕", "hand", "手"]) {
         return Role::Arm;
     }
-    if has(&n, &["face", "顔", "skin", "肌", "輪郭", "head", "頭"]) {
+    if has(
+        &n,
+        &["face", "顔", "skin", "肌", "輪郭", "head", "頭", "涙", "汗"],
+    ) || word(&["tear", "tears"])
+    {
         return Role::Face;
     }
     if has(
@@ -306,8 +377,46 @@ pub fn classify(name: &str, groups: &[String]) -> Role {
             "肩",
             "coat",
             "jacket",
+            "上着",
+            "襟",
+            "collar",
+            "インナー",
+            "inner",
+            "スカート",
+            "skirt",
+            "脚",
+            "足",
+            "pants",
+            "ズボン",
+            "靴",
+            "shoe",
+            "袖",
+            "sleeve",
+            "衣装",
+            "costume",
+            "ベスト",
+            "セーター",
+            "sweater",
+            "パーカー",
+            "hoodie",
+            "ワンピース",
+            "コート",
+            "スカーフ",
+            "scarf",
+            "ボタン",
+            "button",
+            "ポケット",
+            "pocket",
+            "ベルト",
+            "belt",
+            "腰",
+            "waist",
+            "タイツ",
+            "ソックス",
         ],
-    ) {
+    ) || word(&[
+        "leg", "legs", "hip", "hips", "vest", "sock", "socks", "boot", "boots",
+    ]) {
         return Role::Body;
     }
     Role::Unknown
@@ -321,6 +430,11 @@ pub struct AutoRigReport {
     /// Names of parts that were not recognised (placed in the body or head
     /// by folder, with no motion of their own).
     pub unrecognised: Vec<String>,
+    /// Reference art and backgrounds left out of the rig (and unmeshed).
+    pub ignored: Vec<String>,
+    /// Parts drawn as A/B alternatives, switched by the `Variant`
+    /// parameter.
+    pub variant_parts: usize,
     /// Deformers created.
     pub deformers: usize,
     /// Physics groups added.
@@ -329,6 +443,54 @@ pub struct AutoRigReport {
 
 fn union(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
     rects.into_iter().reduce(|a, b| a.union(&b))
+}
+
+/// A or B, for a part drawn as one of two alternatives, as Live2D sample
+/// PSDs name them ("腕A_L" and "腕B_L": arms crossed or down). The letter
+/// stands on its own — not inside a Latin word — in the part's name or,
+/// failing that, its innermost folder's.
+pub fn variant_of(name: &str, groups: &[String]) -> Option<char> {
+    let letter = |text: &str| {
+        let chars: Vec<char> = text.chars().collect();
+        (0..chars.len()).find_map(|i| {
+            let c = chars[i];
+            let alone = |j: Option<&char>| !j.is_some_and(|c| c.is_ascii_alphabetic());
+            ((c == 'A' || c == 'B')
+                && alone(i.checked_sub(1).and_then(|j| chars.get(j)))
+                && alone(chars.get(i + 1)))
+            .then_some(c)
+        })
+    };
+    letter(name).or_else(|| groups.iter().rev().find_map(|g| letter(g)))
+}
+
+/// `name` with its variant letter taken out: what A and B share.
+fn variant_base(name: &str, groups: &[String]) -> String {
+    let path = format!("{}/{}", groups.join("/"), name);
+    let chars: Vec<char> = path.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let alone = |j: Option<&char>| !j.is_some_and(|c| c.is_ascii_alphabetic());
+            if (c == 'A' || c == 'B')
+                && alone(i.checked_sub(1).and_then(|j| chars.get(j)))
+                && alone(chars.get(i + 1))
+            {
+                '*'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// At least nine tenths of `part` lies inside `region`.
+fn mostly_inside(part: Rect, region: Rect) -> bool {
+    let w = (part.max.x.min(region.max.x) - part.min.x.max(region.min.x)).max(0.0);
+    let h = (part.max.y.min(region.max.y) - part.min.y.max(region.min.y)).max(0.0);
+    let area = (part.width() * part.height()).max(1e-6);
+    w * h >= 0.9 * area
 }
 
 fn param(rig: &Rig, name: &str) -> Result<ParameterId> {
@@ -357,6 +519,14 @@ fn add_at_key(rig: &mut Rig, layer: LayerId, param: ParameterId, key: usize, off
     }
 }
 
+/// Bind `param` to a mesh unless it already drives it.
+fn bind_once(rig: &mut Rig, layer: LayerId, param: ParameterId, keys: &[f32]) -> Result<()> {
+    if rig.mesh(layer).is_some_and(|m| m.keyforms.uses(param)) {
+        return Ok(());
+    }
+    rig.bind_parameter(RigNode::Mesh(layer), param, keys)
+}
+
 /// Build a complete rig from `parts`. The rig's existing deformers, bones,
 /// physics and mesh keyforms are replaced; meshes and parameters are kept.
 pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<AutoRigReport> {
@@ -379,9 +549,20 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
     let parts: Vec<&PartInfo> = parts.iter().filter(|p| rig.mesh(p.layer).is_some()).collect();
 
     // Classify, letting folders decide for unrecognised parts.
+    // An unnamed layer covering nearly the whole picture is a backdrop.
+    let everything = union(parts.iter().map(|p| p.bounds));
+    let area = |r: Rect| r.width().max(0.0) * r.height().max(0.0);
     let mut roles: Vec<(Role, &PartInfo)> = Vec::new();
     for part in &parts {
         let mut role = classify(&part.name, &part.groups);
+        if role == Role::Unknown && everything.is_some_and(|all| area(part.bounds) >= 0.9 * area(all)) {
+            role = Role::Reference;
+        }
+        if role == Role::Reference {
+            rig.remove_mesh(part.layer);
+            report.ignored.push(part.name.clone());
+            continue;
+        }
         if role == Role::Unknown {
             let folder = part.groups.join(" ").to_lowercase();
             if has(&folder, &["head", "face", "頭", "顔"]) {
@@ -390,6 +571,33 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
             report.unrecognised.push(part.name.clone());
         }
         roles.push((role, part));
+    }
+    // Unrecognised parts lying within an eye (clipping masks, extra
+    // shading) open and close with that eye. An eye is a white with the
+    // irises and lashes that overlap it.
+    let eye_parts: Vec<Rect> = roles
+        .iter()
+        .filter(|(r, _)| matches!(r, Role::Iris | Role::Lash))
+        .map(|(_, p)| p.bounds)
+        .collect();
+    let eyes: Vec<Rect> = roles
+        .iter()
+        .filter(|(r, _)| *r == Role::EyeWhite)
+        .map(|(_, p)| {
+            let white = p.bounds;
+            let near = white.expanded(2.0);
+            let eye = eye_parts
+                .iter()
+                .filter(|b| mostly_inside(**b, near.expanded(white.height() * 0.5)))
+                .fold(white, |eye, b| eye.union(b));
+            eye.expanded(3.0 + 0.1 * eye.width().max(eye.height()))
+        })
+        .collect();
+    for (role, part) in roles.iter_mut() {
+        if *role == Role::Unknown && eyes.iter().any(|e| mostly_inside(part.bounds, *e)) {
+            *role = Role::EyeWhite;
+            report.unrecognised.retain(|n| n != &part.name);
+        }
     }
     let head_parts: Vec<&PartInfo> = roles
         .iter()
@@ -414,9 +622,12 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
     let face_h = face_bounds.height().max(1.0);
 
     // Accessories near the head swing with it; others hang off the body.
+    // Unrecognised parts on the face go with the head.
     let head_region = union(head_parts.iter().map(|p| p.bounds)).unwrap_or(face_bounds);
     let in_head = |role: Role, part: &PartInfo| {
-        role.is_head() || (role == Role::Accessory && head_region.contains(part.bounds.center()))
+        role.is_head()
+            || (role == Role::Accessory && head_region.contains(part.bounds.center()))
+            || (role == Role::Unknown && face_bounds.contains(part.bounds.center()))
     };
     let head_layers: Vec<LayerId> = roles
         .iter()
@@ -519,50 +730,126 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
         }
         s => s,
     };
+    // Some PSDs draw a detail of both eyes on one layer (the irises' line
+    // art, say). Such a part's vertices follow the nearer eye.
+    let spans_both = |p: &PartInfo| {
+        p.bounds.min.x < face_center.x - face_w * 0.08 && p.bounds.max.x > face_center.x + face_w * 0.08
+    };
+    let eye_of = |side: Side| {
+        let of = |role: Role| {
+            union(
+                roles
+                    .iter()
+                    .filter(|(r, p)| *r == role && !spans_both(p) && side_for(p) == side)
+                    .map(|(_, p)| p.bounds),
+            )
+        };
+        of(Role::EyeWhite)
+            .or_else(|| of(Role::Iris))
+            .or_else(|| of(Role::Lash))
+    };
+    let eye_centres = match (eye_of(Side::Left), eye_of(Side::Right)) {
+        (Some(l), Some(r)) => Some((l.center().x, r.center().x)),
+        _ => None,
+    };
+    let nearer = |v: Vec2| {
+        eye_centres.map(|(l, r)| {
+            if (v.x - l).abs() <= (v.x - r).abs() {
+                Side::Left
+            } else {
+                Side::Right
+            }
+        })
+    };
     for side in [Side::Left, Side::Right] {
         let (open_name, brow_name) = match side {
             Side::Left => ("EyeLOpen", "BrowLY"),
             _ => ("EyeROpen", "BrowRY"),
         };
         let open = param(rig, open_name)?;
+        let shared = |p: &PartInfo| eye_centres.is_some() && spans_both(p);
         let of = |role: Role| -> Vec<&PartInfo> {
             roles
                 .iter()
-                .filter(|(r, p)| *r == role && side_for(p) == side)
+                .filter(|(r, p)| *r == role && (shared(p) || (!spans_both(p) && side_for(p) == side)))
                 .map(|(_, p)| *p)
                 .collect()
+        };
+        // Which of a part's vertices this eye moves, and their bounds.
+        let mine = |p: &PartInfo, v: Vec2| !shared(p) || nearer(v) == Some(side);
+        let bounds_of = |rig: &Rig, p: &PartInfo| -> Rect {
+            if !shared(p) {
+                return p.bounds;
+            }
+            let own: Vec<Vec2> = rig
+                .mesh(p.layer)
+                .map(|m| m.vertices.iter().copied().filter(|v| mine(p, *v)).collect())
+                .unwrap_or_default();
+            if own.is_empty() {
+                p.bounds
+            } else {
+                crate::mesh::bounds_of(&own)
+            }
         };
         let whites = of(Role::EyeWhite);
         let irises = of(Role::Iris);
         let lashes = of(Role::Lash);
-        let eye = union(whites.iter().map(|p| p.bounds))
-            .or_else(|| union(irises.iter().map(|p| p.bounds)))
-            .or_else(|| union(lashes.iter().map(|p| p.bounds)));
+        let eye = eye_of(side);
         if let Some(eye) = eye {
             let line = eye.min.y + eye.height() * 0.66;
             for part in &whites {
-                generate::squash(rig, RigNode::Mesh(part.layer), open, 0.66)?;
+                if shared(part) {
+                    bind_once(rig, part.layer, open, &[0.0, 1.0])?;
+                    add_at_key(rig, part.layer, open, 0, |v| {
+                        Vec2::new(0.0, if mine(part, v) { line - v.y } else { 0.0 })
+                    });
+                } else {
+                    generate::squash(rig, RigNode::Mesh(part.layer), open, 0.66)?;
+                }
             }
             for part in &irises {
-                let local = ((line - part.bounds.min.y) / part.bounds.height().max(1.0)).clamp(0.0, 1.0);
-                generate::squash(rig, RigNode::Mesh(part.layer), open, local)?;
+                if shared(part) {
+                    bind_once(rig, part.layer, open, &[0.0, 1.0])?;
+                    add_at_key(rig, part.layer, open, 0, |v| {
+                        Vec2::new(0.0, if mine(part, v) { line - v.y } else { 0.0 })
+                    });
+                } else {
+                    let local = ((line - part.bounds.min.y) / part.bounds.height().max(1.0)).clamp(0.0, 1.0);
+                    generate::squash(rig, RigNode::Mesh(part.layer), open, local)?;
+                }
                 // Look around.
                 for (name, shift) in [
                     ("EyeBallX", Vec2::new(eye.width() * 0.16, 0.0)),
                     ("EyeBallY", Vec2::new(0.0, -eye.height() * 0.18)),
                 ] {
                     let id = param(rig, name)?;
-                    rig.bind_parameter(RigNode::Mesh(part.layer), id, &[-1.0, 0.0, 1.0])?;
-                    add_at_key(rig, part.layer, id, 0, |_| shift * -1.0);
-                    add_at_key(rig, part.layer, id, 2, |_| shift);
+                    bind_once(rig, part.layer, id, &[-1.0, 0.0, 1.0])?;
+                    let shift_of = |v: Vec2| if mine(part, v) { shift } else { Vec2::ZERO };
+                    add_at_key(rig, part.layer, id, 0, |v| shift_of(v) * -1.0);
+                    add_at_key(rig, part.layer, id, 2, shift_of);
                 }
             }
             for part in &lashes {
-                rig.bind_parameter(RigNode::Mesh(part.layer), open, &[0.0, 1.0])?;
-                let bottom = part.bounds.max.y;
-                let drop = line - bottom + part.bounds.height() * 0.5;
+                bind_once(rig, part.layer, open, &[0.0, 1.0])?;
+                let bounds = bounds_of(rig, part);
+                let only = |offset: Vec2, v: Vec2| if mine(part, v) { offset } else { Vec2::ZERO };
+                let bottom = bounds.max.y;
+                if bounds.center().y > line {
+                    // A lower lash stays, rising a little to meet the lid.
+                    let rise = (line - bounds.min.y).min(0.0) * 0.25;
+                    add_at_key(rig, part.layer, open, 0, |v| only(Vec2::new(0.0, rise), v));
+                    continue;
+                }
+                if bottom < eye.min.y + 1.0 {
+                    // A double-eyelid line above the eye moves down with the
+                    // lid but stays above the closed line.
+                    let drop = (line - eye.min.y) * 0.85;
+                    add_at_key(rig, part.layer, open, 0, |v| only(Vec2::new(0.0, drop), v));
+                    continue;
+                }
+                let drop = line - bottom + bounds.height() * 0.5;
                 add_at_key(rig, part.layer, open, 0, |v| {
-                    Vec2::new(0.0, drop + (bottom - v.y) * 0.4)
+                    only(Vec2::new(0.0, drop + (bottom - v.y) * 0.4), v)
                 });
             }
         }
@@ -633,6 +920,38 @@ pub fn auto_rig(rig: &mut Rig, ids: &IdGenerator, parts: &[PartInfo]) -> Result<
                 }
             }
         }
+    }
+
+    // Parts drawn as A/B alternatives: A shows at Variant 0, B at 1. Only
+    // when some part really comes in both.
+    let variants: Vec<(LayerId, char, String)> = roles
+        .iter()
+        .filter_map(|(_, p)| {
+            variant_of(&p.name, &p.groups).map(|v| (p.layer, v, variant_base(&p.name, &p.groups)))
+        })
+        .collect();
+    let paired = variants
+        .iter()
+        .any(|(_, v, base)| *v == 'A' && variants.iter().any(|(_, w, other)| *w == 'B' && other == base));
+    if paired {
+        let variant = match rig.parameter_named("Variant") {
+            Some(p) => p.id,
+            None => rig
+                .add_parameter(Parameter::new(ids.parameter(), "Variant", 0.0, 1.0, 0.0).in_group("Parts"))?,
+        };
+        for (layer, v, _) in &variants {
+            rig.bind_parameter(RigNode::Mesh(*layer), variant, &[0.0, 1.0])?;
+            if let Some(mesh) = rig.mesh_mut(*layer) {
+                if let Some(a) = mesh.keyforms.axes.iter().position(|x| x.param == variant) {
+                    let stride: usize = mesh.keyforms.axes[..a].iter().map(|x| x.keys.len()).product();
+                    for (i, form) in mesh.keyforms.forms.iter_mut().enumerate() {
+                        let at_b = (i / stride) % 2 == 1;
+                        form.opacity *= if at_b == (*v == 'B') { 1.0 } else { 0.0 };
+                    }
+                }
+            }
+        }
+        report.variant_parts = variants.len();
     }
 
     // Hair and accessories sway.
@@ -738,8 +1057,120 @@ mod tests {
             ("体", &none, Role::Body),
             ("shirt", &none, Role::Body),
             ("レイヤー 12", &none, Role::Unknown),
+            // As Live2D sample PSDs name things.
+            ("目玉R", &none, Role::Iris),
+            ("目hi上L", &none, Role::Iris),
+            ("顔hi_L", &none, Role::Face),
+            ("Eye white", &none, Role::EyeWhite),
+            ("二重線R", &none, Role::Lash),
+            ("下まつげ1L", &none, Role::Lash),
+            ("照れ線L", &none, Role::Cheek),
+            ("頬_染め", &none, Role::Cheek),
+            ("頬_通常L", &none, Role::Face),
+            ("生え際R", &none, Role::Hair),
+            ("テール", &none, Role::HairBack),
+            ("涙_L", &none, Role::Face),
+            ("上着襟", &none, Role::Body),
+            ("スカート", &none, Role::Body),
+            ("脚R", &none, Role::Body),
+            ("スカーフリボン右", &none, Role::Accessory),
+            ("原画A", &none, Role::Reference),
+            ("bg", &none, Role::Reference),
+            ("背景", &none, Role::Reference),
         ] {
             assert_eq!(classify(name, groups), role, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_detail_drawn_across_both_eyes_follows_each_eye() {
+        let (mut rig, ids, mut parts) = character();
+        let mut both = part(&mut rig, 20, "線", r(185.0, 250.0, 325.0, 280.0));
+        both.groups = vec!["目玉R".into()];
+        parts.push(both);
+        let report = auto_rig(&mut rig, &ids, &parts).expect("auto rig");
+        assert!(report.unrecognised.iter().all(|n| n != "線"));
+        let layer = LayerId(20);
+        let rest = rig.evaluate().meshes[&layer].positions.clone();
+        set(&mut rig, "EyeLOpen", 0.0);
+        let closed = rig.evaluate().meshes[&layer].positions.clone();
+        let moved: Vec<bool> = rest
+            .iter()
+            .zip(&closed)
+            .map(|(a, b)| a.distance(*b) > 0.5)
+            .collect();
+        // Quad corners: two over each eye. Only the left eye's side moves.
+        let left_side: Vec<bool> = rest.iter().map(|v| v.x < 255.0).collect();
+        assert!(moved.iter().any(|m| *m), "something closes");
+        assert_eq!(moved, left_side, "only the vertices over the left eye close");
+    }
+
+    #[test]
+    fn a_and_b_alternatives_are_told_apart() {
+        let none: Vec<String> = Vec::new();
+        assert_eq!(variant_of("腕A_L", &none), Some('A'));
+        assert_eq!(variant_of("手（振り）B_R", &none), Some('B'));
+        assert_eq!(variant_of("ライン", &["腕B_R".to_string()]), Some('B'));
+        assert_eq!(variant_of("Arm B", &none), Some('B'));
+        assert_eq!(variant_of("BodyA", &none), None, "inside a word");
+        assert_eq!(variant_of("Bangs", &none), None);
+        assert_eq!(variant_base("腕A_L", &none), variant_base("腕B_L", &none));
+        assert_ne!(variant_base("腕A_L", &none), variant_base("腕B_R", &none));
+    }
+
+    #[test]
+    fn a_and_b_arms_switch_with_the_variant_parameter() {
+        let (mut rig, ids, mut parts) = character();
+        parts.push(part(&mut rig, 20, "腕A_L", r(60.0, 420.0, 120.0, 600.0)));
+        parts.push(part(&mut rig, 21, "腕B_L", r(40.0, 420.0, 110.0, 640.0)));
+        let report = auto_rig(&mut rig, &ids, &parts).expect("auto rig");
+        assert_eq!(report.variant_parts, 2);
+        let opacity = |rig: &Rig, id: u64| rig.evaluate().meshes[&LayerId(id)].opacity;
+        assert_eq!(
+            (opacity(&rig, 20), opacity(&rig, 21)),
+            (1.0, 0.0),
+            "A shows at rest"
+        );
+        set(&mut rig, "Variant", 1.0);
+        assert_eq!((opacity(&rig, 20), opacity(&rig, 21)), (0.0, 1.0));
+
+        // A layer covering everything is a backdrop, left out of the rig.
+        let (mut rig, ids, mut parts) = character();
+        parts.push(part(&mut rig, 30, "レイヤー 38", r(0.0, 0.0, 500.0, 700.0)));
+        let report = auto_rig(&mut rig, &ids, &parts).expect("auto rig");
+        assert_eq!(report.ignored, vec!["レイヤー 38".to_string()]);
+        assert!(rig.mesh(LayerId(30)).is_none());
+
+        // Without a pair, a lone letter means nothing.
+        let (mut rig, ids, mut parts) = character();
+        parts.push(part(&mut rig, 20, "Plan A", r(60.0, 420.0, 120.0, 600.0)));
+        let report = auto_rig(&mut rig, &ids, &parts).expect("auto rig");
+        assert_eq!(report.variant_parts, 0);
+        assert!(rig.parameter_named("Variant").is_none());
+    }
+
+    #[test]
+    fn generic_layers_take_their_folders_role() {
+        let g = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (name, groups, role) in [
+            ("レイヤー 30", g(&["前髪"]), Role::HairFront),
+            ("線", g(&["まゆ毛L"]), Role::Brow),
+            ("肌", g(&["耳R"]), Role::Ear),
+            ("肌", g(&["手B_R"]), Role::Arm),
+            ("顔hi_鼻", g(&["鼻"]), Role::Nose),
+            ("目 のコピー", g(&["目玉R"]), Role::Iris),
+            ("口", g(&["口差分　開き"]), Role::MouthOpen),
+            ("ライン", g(&["スカーフリボン右"]), Role::Accessory),
+            ("k", g(&["原画"]), Role::Reference),
+            // Folders holding several kinds of part keep their parts' roles.
+            ("左目", g(&["顔"]), Role::EyeWhite),
+            ("瞳", g(&["目L"]), Role::Iris),
+            ("舌", g(&["口"]), Role::MouthOpen),
+            ("前髪", g(&["髪"]), Role::HairFront),
+            ("腕", g(&["体"]), Role::Arm),
+            ("線", g(&["顔", "前髪"]), Role::HairFront),
+        ] {
+            assert_eq!(classify(name, &groups), role, "{groups:?}/{name}");
         }
     }
 
