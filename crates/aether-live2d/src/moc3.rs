@@ -405,8 +405,8 @@ pub struct Moc {
     pub key_tables: KeyTables,
     /// Parameter key values, flattened.
     pub keys: Vec<f32>,
-    /// Texture coordinates, u and v interleaved, v up unless the canvas is
-    /// y-reversed.
+    /// Texture coordinates, u and v interleaved, v down (image rows); Core
+    /// reports them flipped to v up unless the canvas is y-reversed.
     pub uvs: Vec<f32>,
     /// Triangle vertex indices.
     pub indices: Vec<u16>,
