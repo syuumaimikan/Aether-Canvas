@@ -12,6 +12,7 @@ members = [
     "crates/aether-document",
     "crates/aether-render",
     "crates/aether-io",
+    "crates/aether-samples",
     "crates/aether-ui",
     "apps/desktop",
 ]
@@ -35,6 +36,7 @@ aether-player-wgpu = { path = "crates/aether-player-wgpu", version = "0.1.0" }
 aether-document = { path = "crates/aether-document", version = "0.1.0" }
 aether-render = { path = "crates/aether-render", version = "0.1.0" }
 aether-io = { path = "crates/aether-io", version = "0.1.0" }
+aether-samples = { path = "crates/aether-samples", version = "0.1.0" }
 aether-ui = { path = "crates/aether-ui", version = "0.1.0" }
 
 # External

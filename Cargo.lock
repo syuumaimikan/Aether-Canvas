@@ -149,6 +149,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-samples"
+version = "0.1.0"
+dependencies = [
+ "aether-core",
+ "aether-document",
+ "aether-io",
+ "aether-raster",
+ "aether-render",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aether-ui"
 version = "0.1.0"
 dependencies = [
