@@ -103,8 +103,8 @@ impl Drivers {
             .collect();
         if !driven.is_empty() {
             notes.push(format!(
-                "drivers are not part of Cubism models: {} move only when set directly \
-                 (apps such as VTube Studio drive them from tracking; motions include the driven curves)",
+                "{}: driven in Aether, ordinary parameters in Cubism (apps such as VTube Studio \
+                 drive them from tracking; exported motions include the driven curves)",
                 driven.join(", ")
             ));
         }
