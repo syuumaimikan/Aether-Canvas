@@ -34,6 +34,10 @@ pub struct Parameter {
     /// Folder in the parameter panel ("Face", "Body", ...).
     #[serde(default)]
     pub group: String,
+    /// Name shown instead of `name` when set (an imported model's display
+    /// name, for example "角度 X"); `name` stays the stable reference.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
     /// When true the range wraps: `max` is the same pose as `min`, as for a
     /// full turn. Keyform interpolation then crosses the seam smoothly.
     #[serde(default)]
@@ -50,6 +54,7 @@ impl Parameter {
             max,
             default,
             group: String::new(),
+            label: String::new(),
             cyclic: false,
         };
         p.sanitize();

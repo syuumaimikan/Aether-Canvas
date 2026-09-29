@@ -31,8 +31,11 @@ const core = context.Live2DCubismCore;
 await new Promise((resolve) => setTimeout(resolve, 300));
 
 const bytes = fs.readFileSync(mocPath);
-const moc = core.Moc.fromArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+const moc = core.Moc.fromArrayBuffer(buffer);
 if (!moc) throw new Error(`Cubism Core could not load ${mocPath}`);
+// The check the Cubism SDK runs on files it did not write itself.
+const consistent = moc.hasMocConsistency(buffer.slice(0)) === 1;
 const model = core.Model.fromMoc(moc);
 
 // mulberry32: small, seedable, the same everywhere.
@@ -50,7 +53,8 @@ const d = model.drawables;
 const listOf = (a) => Array.from(a);
 const info = {
   core: core.Version.csmGetVersion(),
-  mocVersion: core.Version.csmGetMocVersion(moc, bytes.buffer),
+  mocVersion: core.Version.csmGetMocVersion(moc, buffer),
+  consistent,
   canvas: model.canvasinfo,
   parameters: { ids: listOf(p.ids), min: listOf(p.minimumValues), max: listOf(p.maximumValues), defaults: listOf(p.defaultValues) },
   parts: { ids: listOf(model.parts.ids), parents: listOf(model.parts.parentIndices) },
@@ -63,6 +67,9 @@ const info = {
     maskCounts: listOf(d.maskCounts),
     masks: listOf(d.masks).map(listOf),
     parentParts: listOf(d.parentPartIndices),
+    // Blend code per drawable, for 5.3 files (the wrapper's array is twice
+    // as long as the data).
+    blendModes: d.blendModes ? listOf(d.blendModes).slice(0, d.count) : null,
     uvs: listOf(d.vertexUvs).map(listOf),
     indices: listOf(d.indices).map(listOf),
   },

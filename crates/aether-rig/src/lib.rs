@@ -38,6 +38,7 @@ pub mod audio;
 pub mod automesh;
 pub mod autorig;
 pub mod behaviour;
+pub mod cubism;
 pub mod deformer;
 pub mod driver;
 pub mod expr;
@@ -55,6 +56,7 @@ pub mod runtime;
 pub mod skeleton;
 
 pub use behaviour::Behaviours;
+pub use cubism::{CubismPose, CubismRig};
 pub use deformer::{Deformer, DeformerKind, RotationDeformer, RotationForm, WarpDeformer, WarpForm};
 pub use driver::Driver;
 pub use keyform::{BlendShape, KeyAxis, KeyInterpolation, KeyformGrid};

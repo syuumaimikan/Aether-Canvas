@@ -67,6 +67,7 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "aether-document",
+ "aether-live2d",
  "aether-player",
  "aether-raster",
  "aether-render",
@@ -140,6 +141,7 @@ name = "aether-rig"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-live2d",
  "aether-raster",
  "serde",
  "serde_json",

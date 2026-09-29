@@ -127,14 +127,26 @@ impl AetherApp {
         self.dock = layout_for(workspace);
     }
 
-    /// Open a project or an image, choosing by extension.
+    /// Open a project, a Live2D model or an image, choosing by extension.
     fn open_path(&mut self, path: PathBuf) {
         let extension = path
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
         let result = if extension == project::EXTENSION {
             self.state.open_project(&path)
+        } else if file_name.ends_with(".model3.json") || extension == "moc3" || path.is_dir() {
+            // A .moc3 or a folder: the model settings file beside or in it.
+            let target = if extension == "moc3" {
+                path.parent().map(PathBuf::from).unwrap_or_default()
+            } else {
+                path.clone()
+            };
+            self.state.open_live2d(&target).map(|_| ())
         } else if extension == "psd" {
             self.state.open_psd(&path)
         } else {
@@ -150,9 +162,11 @@ impl AetherApp {
     fn pick_and_open(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
-                "Aether project, Photoshop or image",
+                "Aether project, Live2D model, Photoshop or image",
                 &[
                     project::EXTENSION,
+                    "json",
+                    "moc3",
                     "psd",
                     "png",
                     "jpg",
@@ -164,6 +178,7 @@ impl AetherApp {
                 ],
             )
             .add_filter("Aether project", &[project::EXTENSION])
+            .add_filter("Live2D model (.model3.json)", &["json", "moc3"])
             .add_filter("Photoshop", &["psd"])
             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "tiff", "bmp", "gif"])
             .pick_file();
@@ -239,6 +254,20 @@ impl AetherApp {
                         ui.close();
                     }
                 }
+                if ui
+                    .button(lang.tr("menu.file.open_live2d"))
+                    .on_hover_text(lang.tr("menu.file.open_live2d_hint"))
+                    .clicked()
+                {
+                    let picked = rfd::FileDialog::new()
+                        .add_filter("Live2D model (.model3.json)", &["json", "moc3"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        self.open_path(path);
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button(lang.tr("menu.file.export_psd")).clicked() {
                     let picked = rfd::FileDialog::new()
                         .add_filter("Photoshop", &["psd"])
@@ -257,6 +286,14 @@ impl AetherApp {
                     .clicked()
                 {
                     self.state.export_runtime_model_via_dialog();
+                    ui.close();
+                }
+                if ui
+                    .button(lang.tr("menu.file.export_live2d"))
+                    .on_hover_text(lang.tr("menu.file.export_live2d_hint"))
+                    .clicked()
+                {
+                    self.state.export_live2d_via_dialog();
                     ui.close();
                 }
                 ui.separator();
@@ -555,6 +592,7 @@ impl AetherApp {
         self.new_document_dialog(ctx);
         self.filter_dialog(ctx);
         self.about_window(ctx);
+        self.export_report_window(ctx);
         self.shortcuts_window(ctx);
         self.close_confirmation(ctx);
     }
@@ -678,6 +716,41 @@ impl AetherApp {
                 ui.label("so your artwork stays readable with ordinary tools.");
             });
         self.show_about = open;
+    }
+
+    /// What the last export approximated or left out.
+    fn export_report_window(&mut self, ctx: &egui::Context) {
+        let Some(report) = self.state.export_report.clone() else {
+            return;
+        };
+        let lang = self.state.language;
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new(lang.tr("export.report.title"))
+            .collapsible(false)
+            .default_width(460.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&report.summary);
+                if report.notes.is_empty() {
+                    ui.label(lang.tr("export.report.exact"));
+                } else {
+                    ui.separator();
+                    ui.label(lang.tr("export.report.notes"));
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for note in &report.notes {
+                            ui.label(format!("• {note}"));
+                        }
+                    });
+                }
+                ui.separator();
+                if ui.button(lang.tr("dialog.ok")).clicked() {
+                    close = true;
+                }
+            });
+        if !open || close {
+            self.state.export_report = None;
+        }
     }
 
     fn shortcuts_window(&mut self, ctx: &egui::Context) {

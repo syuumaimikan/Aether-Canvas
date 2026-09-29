@@ -415,6 +415,28 @@ impl Compositor {
                 pm.fill_rect(region, fill.color);
                 Cow::Owned(pm)
             }
+            LayerContent::Live2D(content) => {
+                let model = doc.rig.cubism.iter().find(|c| c.layer == layer.id)?;
+                // Without a pose (the rest view, or deformation off) the
+                // model shows at its defaults.
+                let rest;
+                let pose = match pass.pose.as_ref().and_then(|p| p.cubism(layer.id)) {
+                    Some(pose) => pose,
+                    None => {
+                        rest = model.evaluate_rest();
+                        &rest
+                    }
+                };
+                Cow::Owned(crate::live2d::render(
+                    model,
+                    &content.textures,
+                    pose,
+                    doc.width,
+                    doc.height,
+                    region,
+                    pass.options.interpolation,
+                ))
+            }
             LayerContent::Adjustment(adjustment) => {
                 let mut adjusted = backdrop.clone();
                 adjustment.adjustment.apply(&mut adjusted, Some(region));

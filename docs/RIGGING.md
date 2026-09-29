@@ -32,6 +32,8 @@ over the character. Rendered headlessly with `examples/ui_screenshot.rs`.*
    texture atlases that the web player and the native runtime play exactly as
    the editor does — see [RUNTIME.md](RUNTIME.md). From a PSD, one command
    does everything: `aether-canvas --auto-rig --export-model out character.psd`.
+   For VTube Studio and other Live2D apps, File ▸ *Export Live2D model…*
+   writes a Cubism model instead (see [Live2D Cubism models](#live2d-cubism-models)).
 
 ![A greeting motion](images/greeting.gif)
 
@@ -101,7 +103,12 @@ secondary motion with no keys.
 
 * **Warp** deformers are lattices (bilinear or bicubic). Bicubic warps bend
   curved features without creases along the lattice lines.
-* **Rotation** deformers are pivots with angle, scale and offset.
+* **Rotation** deformers are pivots with angle, scale and offset. They stay
+  rigid wherever they sit: inside a warp, the pivot follows the warp and the
+  rotation turns with the warp's local direction, but what it carries is
+  never stretched or sheared by the lattice — so a head pivoting on a body
+  warp moves as a whole. (This is Live2D Cubism's rule too, which is why
+  rigs export to Cubism faithfully.)
 
 Deformers nest to any depth; meshes and deformers can also follow a **bone**
 rigidly. Drags with the Deform tool are mapped back through every parent, so
@@ -241,12 +248,96 @@ posed from the motion at the playhead.*
   a sprite sheet with a JSON atlas; physics can run during export after a
   warm-up so chains start settled.
 
-## Live2D motions and expressions
+## Live2D Cubism models
+
+Aether reads and writes Live2D Cubism models, so a character can move
+between the two, and anything rigged in Aether can be used in VTube Studio,
+nizima LIVE and apps built on the Cubism SDKs.
+
+### Opening a Live2D model
+
+**File ▸ Open Live2D model…** (or *Open…*, or dropping a `.model3.json`,
+`.moc3` or model folder) opens a Cubism model as a document. It is drawn
+exactly as Cubism Core draws it — deformation, masks, blend modes, culling —
+and checked against Cubism Core itself on Live2D's sample models. Its
+parameters (with their display names), parts, pose groups, hit areas,
+motions, expressions, blinking and lip sync become ordinary rig parameters
+and animation, and its physics runs as the Cubism Framework runs it. From
+there you can animate it on Aether's timeline, add and edit motions and
+expressions, drive it with face tracking, and export it again.
+
+### Exporting a Live2D model
+
+**File ▸ Export Live2D model…** asks for a folder and writes a complete
+Cubism model into it:
+
+```text
+NAME.model3.json    the model settings (what apps open)
+NAME.moc3           the model
+NAME.2048/          texture pages (power-of-two squares)
+NAME.physics3.json  physics
+NAME.cdi3.json      parameter and part display names
+motions/            one .motion3.json per motion ("Idle…" motions form the Idle group)
+expressions/        one .exp3.json per expression
+```
+
+Blinking and lip sync are declared in the model settings, so the Cubism
+SDK's eye-blink and lip-sync helpers (and VTube Studio) drive the right
+parameters. When the export finishes, a window lists anything that was
+approximated or left out. Headlessly:
+`aether-canvas --auto-rig --export-live2d out character.psd` goes from a
+PSD to a Cubism model in one command.
+
+**An opened Live2D model** is written back as it came — the `.moc3` and
+textures byte for byte — with the motions, expressions, pose groups, hit
+areas, parameter ranges and display names as edited in Aether.
+
+**A document rigged in Aether** becomes a new Cubism model:
+
+* The hierarchy carries over: warps become warps, rotations become
+  rotations, and **bones become nested rotation deformers** (a bone's
+  children turn about its head, as a rotation's turn about its pivot).
+  Layer groups become parts, clipping becomes masks, and draw order, glue,
+  opacity and multiply/screen tint carry over.
+* Every object's keyforms are **sampled from Aether's own evaluation** on a
+  grid over the parameters it depends on, and a key is added wherever
+  Cubism's straight-line interpolation between keys would stray from what
+  Aether draws. So smooth (Catmull-Rom) key interpolation, blend shapes,
+  skinning and inverse kinematics all come across, as extra keyforms.
+  Smooth (bicubic) warps become bilinear warps on a finer lattice — finer
+  still where rotations inside them carry artwork far from their pivot.
+* The model is then **evaluated the way Cubism Core does and compared with
+  the editor**, vertex by vertex, at the defaults, at each parameter's
+  extremes and at random poses. The largest difference is reported; an
+  auto-rigged test character stays within a pixel. Parts that differ by
+  more than a few pixels are named.
+* **Physics** chains are translated (the same inputs, particles and
+  outputs) and then fitted: Aether's simulation and Cubism's are played the
+  same head movements, and Cubism's delay, mobility, acceleration, output
+  gain and directions are chosen to match. The two integrate differently,
+  so the sway is close rather than identical, and the export says so when
+  the difference is noticeable. Colliders, wind and angle limits have no
+  Cubism equivalent and are listed.
+* **Drivers** are not part of Cubism models. By default the driven
+  parameter becomes an ordinary parameter (VTube Studio and the Cubism SDK
+  samples drive `BodyAngleX` and the like from tracking themselves), and
+  every exported motion gets the driven curves the editor would play. The
+  library option `bake_drivers` folds drivers into the keyforms instead, at
+  the cost of much larger files.
+* Jiggle, breathing and look-at are left to the app; screen blending needs
+  the Cubism 5.3 format (`Live2DExportOptions::version`), otherwise it is
+  drawn as add.
+
+The `.moc3` is the runtime format that apps load, not a Cubism Editor
+project (`.cmo3`), which keeps editing data the runtime format does not
+have.
+
+### Motions and expressions on their own
 
 Aether's standard parameters are Live2D's without the `Param` prefix
 (`AngleX` ↔ `ParamAngleX`), and expressions blend the same three ways, so
-Live2D motions (`.motion3.json`) and expressions (`.exp3.json`) move both
-ways:
+Live2D motions (`.motion3.json`) and expressions (`.exp3.json`) also move
+between rigs individually:
 
 * **Import** (*Import Live2D…* in the Timeline, *Import .exp3.json…* under
   Expressions) brings motions and expressions along when a character moves
@@ -309,7 +400,7 @@ of where each stands.
 | Getting started | **✨ Auto rig from layer names** (EN/JA): full rig with physics, behaviours and an idle motion in one step | Templates and assisted face-motion generation for some parts |
 | Meshes | Automatic from alpha with a **coverage guarantee**; **re-meshing keeps keyforms**, skin and jiggle weights; manual editing | Automatic and manual meshing |
 | Keyform grid | **Any number of parameters**, linear or **smooth (C1) interpolation**, cyclic parameters, additive blend shapes | Multi-parameter keyforms (linear), blend shapes |
-| Deformers | Warp (**bicubic** or bilinear) and rotation, nested; **drag mapping through deformed parents** | Warp (Bézier) and rotation, nested |
+| Deformers | Warp (**bicubic** or bilinear) and rotation (rigid, as in Cubism), nested; **drag mapping through deformed parents** | Warp (Bézier) and rotation, nested |
 | Head turn | **Generated 3D ellipsoid turn**, fold-free, 3×3 keys with smooth interpolation | Manual keyforms or face-motion generation |
 | Bones | **Skeleton with FK, analytic two-bone IK, CCD IK, linear blend skinning, automatic weights** | No skeletal bones or IK |
 | Per-key appearance | Opacity, multiply and screen tint, draw order | Opacity, multiply and screen tint, draw order |
@@ -327,7 +418,7 @@ of where each stands.
 | Runtime | **One open-source runtime running the editor's own rig code**: WebAssembly + WebGL 1/2 for the web (≈190 KB gzipped, ~0.8 ms per frame for the demo character), a C ABI for native hosts, a Rust crate, a software renderer. Every rig feature above plays back (bones and IK, drivers, jiggle, glue, physics, motions, behaviours), parity-tested against the editor; effects and masks are baked into textures and blend modes map to normal, multiply, screen and add | **Mature official SDKs** for Unity, native C++, web and Java |
 | Engine integration | **A Godot 4 package** (the `AetherModel2D` node: rig, motions, expressions, look-at, lip sync, face tracking, hit testing, clipping and every blend mode, tested in Godot with all three renderers); **a Unity package** (the `AetherModel` component; its C# binding tested with .NET, its scripts compiled against Unity's assemblies, not yet run inside Unity); any engine through the C ABI; a wgpu renderer for Rust engines | **Official packages for Unity and native engines**; no official Godot package |
 | Editor preview | Poses and playback drawn on the GPU whenever that is exact (checked against the CPU compositor); the full compositor otherwise | GPU |
-| Live2D files | **Imports and exports Live2D motions and expressions**, so Aether's timeline can animate existing Live2D models | — |
+| Live2D files | **Opens Live2D models** (drawn exactly as Cubism Core draws them, physics as the Cubism Framework runs it) to animate, edit and export again; **exports rigs made in Aether as Cubism models** (.moc3, physics, motions, expressions) for VTube Studio and the Cubism SDKs, checked against Cubism's own evaluation | — |
 | Face tracking | **Built into the runtime**: webcam tracking in the web player (MediaPipe, on the device), and one API for any ARKit/MediaPipe-style tracker, mapped identically on every platform | Through third-party apps (VTube Studio and others) |
 | Ecosystem | New | **Large**: tracking apps, tutorials, marketplaces |
 | Price | **Free and open source** (MIT / Apache-2.0) | Free tier with limits; paid Pro licence |
@@ -352,7 +443,8 @@ Aether Canvas は、描いたレイヤーをそのまま動かせる 2D リギ�
 * 保存形式は JSON と PNG の ZIP で、仕様を公開しています。
 * **ランタイム**：「ファイル ▸ ランタイムモデルを書き出し…」で model.json とテクスチャアトラスを出力し、Web（WebAssembly + WebGL、gzip 約 190 KB）、C ABI 経由のネイティブ環境、Rust で再生できます。エディタと同じリグのコードが動くため、見た目も動きもエディタと一致します（自動テストで検証済み）。PSD からは `aether-canvas --auto-rig --export-model 出力先 character.psd` の 1 コマンドで、リグ付きの再生可能なモデルになります。
 * **Godot 4 パッケージ**：`AetherModel2D` ノードを置いて model.json を指定するだけで再生できます。モーション・表情・視線追従・口パク・フェイストラッキング・当たり判定を GDScript から操作でき、クリッピングと 4 種の合成モードも含めて Godot の 3 つのレンダラーすべてでソフトウェアレンダラーと同じ絵になることを Godot 上の自動テストで確認しています（Live2D には公式の Godot パッケージがありません）。
-* **Live2D との相互運用**：Live2D のモーション（.motion3.json）と表情（.exp3.json）を読み込み・書き出しできます。標準パラメータ名は Live2D の `Param` を除いたもの（`AngleX` ↔ `ParamAngleX`）なので、そのまま対応します。Aether のタイムライン（弾性・バウンス・スプリングのキー、WAV からの口パク焼き込み）で既存の Live2D モデル用のモーションを作ることもできます。
+* **Live2D モデルの読み込みと書き出し**：「ファイル ▸ Live2D モデルを開く…」で Cubism モデル（.model3.json）を開くと、Cubism Core と同じ変形・マスク・合成で表示され（Live2D のサンプルモデルで Cubism Core 本体と照合済み）、パラメータ・パーツ・モーション・表情・物理演算をそのまま編集・再生できます。「ファイル ▸ Live2D モデルを書き出し…」では、開いた Live2D モデルを編集内容込みで書き戻せるほか、**Aether でリグを組んだキャラクターを新しい Cubism モデル（.moc3・.model3.json・物理演算・モーション・表情）として書き出し**、VTube Studio や nizima LIVE、Cubism SDK で使えます。ボーンは入れ子の回転デフォーマに変換され、スムーズ補間やスキニングはキーフォームを自動で追加して再現します。書き出し後は Cubism と同じ計算でエディタとの差を頂点ごとに検証し、近似した点を一覧で表示します（自動リグしたテストキャラクターでは誤差 1 px 未満）。物理演算は Cubism 側の設定をエディタの揺れに合わせて自動調整しますが、計算方式が異なるため完全には一致しません。PSD からは `aether-canvas --auto-rig --export-live2d 出力先 character.psd` の 1 コマンドで Cubism モデルになります。
+* **Live2D のモーションと表情**：Live2D のモーション（.motion3.json）と表情（.exp3.json）を単体でも読み込み・書き出しできます。標準パラメータ名は Live2D の `Param` を除いたもの（`AngleX` ↔ `ParamAngleX`）なので、そのまま対応します。Aether のタイムライン（弾性・バウンス・スプリングのキー、WAV からの口パク焼き込み）で既存の Live2D モデル用のモーションを作ることもできます。
 * **フェイストラッキング**：Web プレイヤーにウェブカメラでの顔トラッキングを内蔵しています（MediaPipe をブラウザ内で実行し、映像は外部に送信しません）。首の向き・傾き、まばたき、視線、眉、口の開閉と笑顔がモデルに反映され、既定では鏡像として動きます。ARKit など他のトラッカーも同じ API で使えます。
 * **Unity パッケージ**：`AetherModel` コンポーネントで再生できます（C# バインディングは .NET 上でネイティブライブラリと突き合わせてテスト済み、スクリプトは Unity のアセンブリに対してコンパイル確認済み。Unity 本体での描画はまだ未検証です）。
 * 一方、実績のある Unity SDK や、トラッキングアプリ・チュートリアル・モデル販売などのエコシステムでは Live2D が先行しています。

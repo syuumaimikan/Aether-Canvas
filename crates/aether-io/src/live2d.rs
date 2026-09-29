@@ -156,14 +156,22 @@ pub fn import_motion(json: &str, rig: &Rig, name: &str) -> Result<(Motion, Vec<S
         motion.fade_out = fade;
     }
     for curve in &file.curves {
-        if curve.target != "Parameter" {
+        // Part opacity curves drive a part parameter of the same name, when
+        // the rig has one (an imported Live2D model's switched parts).
+        let part = curve.target == "PartOpacity" && rig.parameter_named(&curve.id).is_some();
+        if curve.target != "Parameter" && !part {
             notes.push(format!(
                 "{} curve {:?} left out (no equivalent)",
                 curve.target, curve.id
             ));
             continue;
         }
-        let Some(param) = resolve_id(rig, &curve.id) else {
+        let resolved = if part {
+            rig.parameter_named(&curve.id).map(|p| p.id)
+        } else {
+            resolve_id(rig, &curve.id)
+        };
+        let Some(param) = resolved else {
             notes.push(format!("curve for {:?} left out (no such parameter)", curve.id));
             continue;
         };
@@ -285,12 +293,33 @@ fn bezier1(p0: f32, p1: f32, p2: f32, p3: f32, s: f32) -> f32 {
     u * u * u * p0 + 3.0 * u * u * s * p1 + 3.0 * u * s * s * p2 + s * s * s * p3
 }
 
+/// What a rig parameter animates in a Live2D model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Live2DTarget {
+    /// A model parameter, by id.
+    Parameter(String),
+    /// A part's opacity, by part id.
+    PartOpacity(String),
+}
+
+/// The default mapping: every parameter by [`live2d_id`] of its name.
+pub fn default_target(rig: &Rig, id: ParameterId) -> Option<Live2DTarget> {
+    rig.parameter(id)
+        .map(|p| Live2DTarget::Parameter(live2d_id(&p.name)))
+}
+
 /// Write a motion as `.motion3.json`, for a rig's parameters.
 pub fn export_motion(motion: &Motion, rig: &Rig) -> String {
+    export_motion_with(motion, &|id| default_target(rig, id))
+}
+
+/// Write a motion as `.motion3.json`, naming what each track animates with
+/// `target`; tracks it maps to `None` are left out.
+pub fn export_motion_with(motion: &Motion, target: &dyn Fn(ParameterId) -> Option<Live2DTarget>) -> String {
     let mut curves = Vec::new();
     let (mut segment_count, mut point_count) = (0usize, 0usize);
     for track in motion.tracks.iter().filter(|t| t.enabled && !t.keys.is_empty()) {
-        let Some(param) = rig.parameter(track.param) else {
+        let Some(target) = target(track.param) else {
             continue;
         };
         let first = &track.keys[0];
@@ -304,9 +333,13 @@ pub fn export_motion(motion: &Motion, rig: &Rig) -> String {
                 segments.extend_from_slice(&piece);
             }
         }
+        let (kind, id) = match target {
+            Live2DTarget::Parameter(id) => ("Parameter", id),
+            Live2DTarget::PartOpacity(id) => ("PartOpacity", id),
+        };
         curves.push(Curve3 {
-            target: "Parameter".into(),
-            id: live2d_id(&param.name),
+            target: kind.into(),
+            id,
             fade_in_time: None,
             fade_out_time: None,
             segments,
@@ -467,6 +500,12 @@ pub fn import_expression(json: &str, rig: &Rig, name: &str) -> Result<(Expressio
 
 /// Write an expression as `.exp3.json`.
 pub fn export_expression(expression: &Expression, rig: &Rig) -> String {
+    export_expression_with(expression, &|id| rig.parameter(id).map(|p| live2d_id(&p.name)))
+}
+
+/// Write an expression as `.exp3.json`, naming each parameter with `id`;
+/// entries it maps to `None` are left out.
+pub fn export_expression_with(expression: &Expression, id: &dyn Fn(ParameterId) -> Option<String>) -> String {
     let file = Expression3 {
         kind: "Live2D Expression".into(),
         fade_in_time: Some(expression.fade),
@@ -475,9 +514,8 @@ pub fn export_expression(expression: &Expression, rig: &Rig) -> String {
             .entries
             .iter()
             .filter_map(|e| {
-                let param = rig.parameter(e.param)?;
                 Some(ExpressionParameter3 {
-                    id: live2d_id(&param.name),
+                    id: id(e.param)?,
                     value: e.value,
                     blend: match e.blend {
                         ExpressionBlend::Add => "Add",

@@ -181,6 +181,18 @@ pub struct EditorState {
     pub quit_requested: bool,
     /// Rigging and animation state: selection, timeline, live preview.
     pub rig: crate::rigging::RigEditor,
+    /// The result of the last export that has something to say, shown in
+    /// a window until dismissed.
+    pub export_report: Option<ExportReport>,
+}
+
+/// What an export did, for the report window.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExportReport {
+    /// Where it went and what was written.
+    pub summary: String,
+    /// What was approximated or left out.
+    pub notes: Vec<String>,
 }
 
 impl Default for EditorState {
@@ -222,6 +234,7 @@ impl EditorState {
             shortcuts: ShortcutMap::standard(),
             quit_requested: false,
             rig: crate::rigging::RigEditor::default(),
+            export_report: None,
         }
     }
 
@@ -396,6 +409,25 @@ impl EditorState {
         self.set_document(doc, None);
         self.status = format!("Imported {} layers", self.doc.layer_count());
         Ok(())
+    }
+
+    /// Open a Live2D Cubism model (its `.model3.json`, or the folder holding
+    /// it) as a new document. Returns what could not be carried over.
+    pub fn open_live2d(&mut self, path: impl AsRef<Path>) -> Result<Vec<String>> {
+        let imported = aether_io::live2d_model::import_live2d(
+            path.as_ref(),
+            &aether_io::live2d_model::Live2DImportOptions::default(),
+        )?;
+        self.set_document(imported.document, None);
+        let rig = &self.doc.rig;
+        let summary = format!(
+            "Opened Live2D model: {} parameters, {} motions, {} expressions",
+            rig.parameters.len(),
+            rig.motions.len(),
+            rig.expressions.len()
+        );
+        self.status = crate::rigging::with_notes(summary, &imported.notes);
+        Ok(imported.notes)
     }
 
     /// Write the document as a layered Photoshop file.
@@ -1421,6 +1453,21 @@ mod tests {
         let back = aether_io::load_image(&path).expect("read back");
         assert_eq!(back.get(5, 5), Rgba8::new(10, 120, 200, 255));
         assert_eq!((back.width(), back.height()), (64, 64));
+    }
+
+    #[test]
+    fn live2d_models_open_as_documents() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/live2d-oracle/models/Hiyori/Hiyori.model3.json");
+        if !path.exists() {
+            eprintln!("no Live2D samples (crates/aether-live2d/oracle/run.sh); skipping");
+            return;
+        }
+        let mut s = state();
+        s.open_live2d(&path).expect("open");
+        assert_eq!(s.doc.rig.cubism.len(), 1);
+        assert!(s.status.contains("Live2D"));
+        assert!(!s.history.can_undo());
     }
 
     #[test]

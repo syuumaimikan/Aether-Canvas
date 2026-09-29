@@ -2,6 +2,9 @@
 //!
 //! * [`moc3`] reads and writes `.moc3` files (every version, 3.0 to 5.3) into
 //!   an owned, validated [`Moc`](moc3::Moc).
+//! * [`builder`] lays out a `Moc` from parameters, parts, deformers and art
+//!   meshes, each keyed on a grid of parameter keys — the way to write a
+//!   new model.
 //! * [`model`] evaluates a `Moc` at a set of parameter values: keyform
 //!   interpolation, blend shapes, warp and rotation deformers, glue, part and
 //!   drawable opacity, multiply/screen colours, and draw and render order.
@@ -18,8 +21,13 @@
 // bound; `max().min()` does the same, `clamp` would keep the NaN.
 #![allow(clippy::manual_clamp)]
 
+pub mod base64;
+pub mod builder;
 pub mod moc3;
 pub mod model;
+pub mod oracle;
+pub mod physics;
 
 pub use moc3::{Moc, MocError};
 pub use model::Model;
+pub use physics::Physics;

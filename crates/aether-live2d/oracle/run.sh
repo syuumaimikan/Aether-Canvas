@@ -21,6 +21,12 @@ for m in Haru Hiyori Mark Natori Rice Mao Wanko Ren; do
     mkdir -p "$dir"
     [ -f "$dir/$m.moc3" ] || curl -sSfL -o "$dir/$m.moc3" "$samples/$m/$m.moc3"
     [ -f "$dir/$m.model3.json" ] || curl -sSfL -o "$dir/$m.model3.json" "$samples/$m/$m.model3.json"
+    # Everything else the model refers to (textures, motions, physics...).
+    for f in $(node "$here/files.mjs" "$dir/$m.model3.json"); do
+        [ -f "$dir/$f" ] && continue
+        mkdir -p "$(dirname "$dir/$f")"
+        curl -sSfL -o "$dir/$f" "$samples/$m/$f" || echo "could not fetch $m/$f"
+    done
 done
 
 if [ ! -f "$out/core.js" ]; then
@@ -30,7 +36,24 @@ if [ ! -f "$out/core.js" ]; then
     rm -rf "$tmp"
 fi
 
+# The Cubism Framework (for physics), as bundled in the npm package
+# "untitled-pixi-live2d-engine".
+if [ ! -f "$out/framework.es.js" ]; then
+    tmp=$(mktemp -d)
+    (cd "$tmp" && npm pack untitled-pixi-live2d-engine@1.4.0 --silent >/dev/null && tar xzf untitled-pixi-live2d-engine-1.4.0.tgz)
+    cp "$tmp/package/dist/cubism.es.js" "$out/framework.es.js"
+    rm -rf "$tmp"
+fi
+
 for m in Haru Hiyori Mark Natori Rice Mao Wanko Ren; do
     node "$here/dump.mjs" "$out/core.js" "$out/models/$m/$m.moc3" "$out/$m" 12
+    physics=$(ls "$out/models/$m/"*.physics3.json 2>/dev/null | head -1)
+    if [ -n "$physics" ]; then
+        node -e "
+const d = require('$out/$m.json').parameters;
+process.stdout.write(JSON.stringify(d.ids.map((id, i) => ({ id, min: d.min[i], max: d.max[i], default: d.defaults[i] }))));
+" > "$out/$m.params.json"
+        node "$here/physics.mjs" "$out/core.js" "$out/framework.es.js" "$physics" "$out/$m.params.json" "$out/$m.physics.json"
+    fi
 done
 echo "wrote $out"

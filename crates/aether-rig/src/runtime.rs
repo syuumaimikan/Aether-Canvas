@@ -85,6 +85,8 @@ pub struct RigRuntime {
     jiggle_accumulator: f32,
     /// Expression weights: index → (current, target).
     expressions: BTreeMap<usize, (f32, f32)>,
+    /// Live2D models' physics and pose fades.
+    cubism: Vec<crate::cubism::CubismRuntime>,
     time: f64,
 }
 
@@ -107,6 +109,7 @@ impl RigRuntime {
     /// Forget all simulated motion (chains hang still, jiggle stops).
     pub fn reset(&mut self) {
         self.physics.reset();
+        self.cubism.clear();
         self.jiggle.clear();
         self.jiggle_accumulator = 0.0;
     }
@@ -195,6 +198,23 @@ impl RigRuntime {
                 .update(&rig.physics, &rig.parameters, &mut values, dt);
         }
 
+        // Live2D models: their own physics, then pose fades.
+        self.cubism
+            .retain(|state| rig.cubism.iter().any(|m| state.matches(m)));
+        let mut cubism_parts = BTreeMap::new();
+        for model in &rig.cubism {
+            let index = match self.cubism.iter().position(|s| s.matches(model)) {
+                Some(i) => i,
+                None => {
+                    self.cubism.push(crate::cubism::CubismRuntime::new(model));
+                    self.cubism.len() - 1
+                }
+            };
+            let state = &mut self.cubism[index];
+            state.step(model, &rig.parameters, &mut values, dt, self.settings.physics);
+            cubism_parts.insert(model.layer, state.part_opacities().to_vec());
+        }
+
         let offsets = if self.settings.jiggle {
             self.step_jiggle(rig, &values, dt)
         } else {
@@ -204,6 +224,7 @@ impl RigRuntime {
 
         rig.dynamics.values = Some(values);
         rig.dynamics.offsets = offsets;
+        rig.dynamics.cubism_parts = cubism_parts;
     }
 
     fn step_jiggle(&mut self, rig: &Rig, values: &ParamValues, dt: f32) -> BTreeMap<LayerId, Vec<Vec2>> {

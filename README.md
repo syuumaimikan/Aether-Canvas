@@ -72,9 +72,16 @@ project, one document model and one timeline.
 - Rigged layers keep every blend mode, mask, clipping group and effect
 - Export GIF, APNG (full colour, soft transparency), PNG sequences and
   sprite sheets; import and export layered PSD
+- Open Live2D Cubism models (`.model3.json`): drawn exactly as Cubism Core
+  draws them, with their parameters, motions, expressions, pose groups and
+  physics, ready to animate, edit and export again
+- Export Live2D Cubism models (File ▸ *Export Live2D model…*, or
+  `--export-live2d`): rigs made in Aether — bones, smooth interpolation,
+  skinning and IK included — become `.moc3` models with physics, motions
+  and expressions for VTube Studio and the Cubism SDKs, checked vertex by
+  vertex against Cubism's own evaluation
 - Import and export Live2D motions (`.motion3.json`) and expressions
-  (`.exp3.json`): bring them along, or animate existing Live2D models with
-  Aether's timeline
+  (`.exp3.json`) on their own
 - An honest comparison with Live2D Cubism is in
   [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
 
@@ -203,7 +210,10 @@ crates/
   aether-document/  layer tree, document model, commands, undo history
   aether-render/    compositor, render cache, viewport maths
   aether-io/        .aether project container, image and PSD import/export,
-                    animation and runtime-model export
+                    animation, runtime-model and Live2D import/export
+  aether-live2d/    Live2D Cubism: an independent MOC3 reader, writer and
+                    builder, an evaluator matching Cubism Core, and physics
+                    matching the Cubism Framework
   aether-player/    the runtime: model format, player, C ABI (also the
                     WebAssembly interface), software renderer
   aether-player-wgpu/ GPU renderer for players: the editor's pose preview and

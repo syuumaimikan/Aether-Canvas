@@ -18,6 +18,7 @@
 pub mod cache;
 pub mod checker;
 pub mod compositor;
+pub mod live2d;
 pub mod viewport;
 
 pub use cache::RenderCache;

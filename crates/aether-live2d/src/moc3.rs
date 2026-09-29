@@ -40,6 +40,29 @@ pub const FLAG_DOUBLE_SIDED: u8 = 1 << 2;
 /// Art mesh flag: drawn only outside its masks.
 pub const FLAG_INVERTED_MASK: u8 = 1 << 3;
 
+/// Cubism 5.3 colour blend modes (the low byte of an art mesh's blend
+/// code; the next byte is the alpha blend, 0 for "over").
+pub const BLEND_NORMAL: i32 = 0;
+/// Additive, as before 5.3.
+pub const BLEND_ADD_COMPATIBLE: i32 = 1;
+/// Multiplicative, as before 5.3.
+pub const BLEND_MULTIPLY_COMPATIBLE: i32 = 2;
+pub const BLEND_ADD: i32 = 3;
+pub const BLEND_ADD_GLOW: i32 = 4;
+pub const BLEND_DARKEN: i32 = 5;
+pub const BLEND_MULTIPLY: i32 = 6;
+pub const BLEND_COLOR_BURN: i32 = 7;
+pub const BLEND_LINEAR_BURN: i32 = 8;
+pub const BLEND_LIGHTEN: i32 = 9;
+pub const BLEND_SCREEN: i32 = 10;
+pub const BLEND_COLOR_DODGE: i32 = 11;
+pub const BLEND_OVERLAY: i32 = 12;
+pub const BLEND_SOFT_LIGHT: i32 = 13;
+pub const BLEND_HARD_LIGHT: i32 = 14;
+pub const BLEND_LINEAR_LIGHT: i32 = 15;
+pub const BLEND_HUE: i32 = 16;
+pub const BLEND_COLOR: i32 = 17;
+
 /// Deformer type: warp.
 pub const DEFORMER_WARP: i32 = 0;
 /// Deformer type: rotation.
@@ -405,8 +428,8 @@ pub struct Moc {
     pub key_tables: KeyTables,
     /// Parameter key values, flattened.
     pub keys: Vec<f32>,
-    /// Texture coordinates, u and v interleaved, v up unless the canvas is
-    /// y-reversed.
+    /// Texture coordinates, u and v interleaved, v down (image rows); Core
+    /// reports them flipped to v up unless the canvas is y-reversed.
     pub uvs: Vec<f32>,
     /// Triangle vertex indices.
     pub indices: Vec<u16>,
