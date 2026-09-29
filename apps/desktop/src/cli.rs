@@ -18,6 +18,9 @@ pub struct Cli {
     /// Export the file as a runtime model into this directory, without
     /// opening a window.
     pub export_model: Option<PathBuf>,
+    /// Export the file as a Live2D Cubism model into this directory,
+    /// without opening a window.
+    pub export_live2d: Option<PathBuf>,
     /// Rig the file from its layer names before exporting.
     pub auto_rig: bool,
     /// Arguments that were not understood.
@@ -32,13 +35,17 @@ USAGE:
     aether-canvas [OPTIONS] [FILE]
 
 ARGS:
-    <FILE>    A .aether project, a layered .psd, or an image to import
+    <FILE>    A .aether project, a layered .psd, a Live2D .model3.json,
+              or an image to import
 
 OPTIONS:
         --export-model <DIR>    Write FILE as a runtime model (model.json and
                                 texture atlases) for games and the web player,
                                 then exit without opening a window
-        --auto-rig              With --export-model: rig FILE from its layer
+        --export-live2d <DIR>   Write FILE as a Live2D Cubism model (.moc3,
+                                .model3.json, physics, motions...) for VTube
+                                Studio and the Cubism SDKs, then exit
+        --auto-rig              With an export: rig FILE from its layer
                                 names first (for a PSD straight from a
                                 painting app)
     -h, --help                  Print this help
@@ -46,6 +53,7 @@ OPTIONS:
 
 EXAMPLE:
     aether-canvas --auto-rig --export-model web/model character.psd
+    aether-canvas --auto-rig --export-live2d vtuber character.psd
 ";
 
 /// Parse arguments (excluding the executable name).
@@ -68,6 +76,15 @@ where
             },
             other if other.starts_with("--export-model=") => {
                 cli.export_model = Some(PathBuf::from(&other["--export-model=".len()..]));
+            }
+            "--export-live2d" => match args.next() {
+                Some(dir) => cli.export_live2d = Some(PathBuf::from(dir.as_ref())),
+                None => cli
+                    .unknown
+                    .push("--export-live2d (needs a directory)".to_string()),
+            },
+            other if other.starts_with("--export-live2d=") => {
+                cli.export_live2d = Some(PathBuf::from(&other["--export-live2d=".len()..]));
             }
             other if other.starts_with('-') => cli.unknown.push(other.to_string()),
             other => {
@@ -123,5 +140,13 @@ mod tests {
         let cli = parse(["--export-model=web", "a.aether"]);
         assert_eq!(cli.export_model, Some(PathBuf::from("web")));
         assert_eq!(parse(["--export-model"]).unknown.len(), 1);
+        let cli = parse(["--auto-rig", "--export-live2d", "vtuber", "character.psd"]);
+        assert_eq!(cli.export_live2d, Some(PathBuf::from("vtuber")));
+        assert!(cli.auto_rig);
+        assert_eq!(
+            parse(["--export-live2d=out", "a.aether"]).export_live2d,
+            Some(PathBuf::from("out"))
+        );
+        assert_eq!(parse(["--export-live2d"]).unknown.len(), 1);
     }
 }

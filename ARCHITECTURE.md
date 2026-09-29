@@ -39,7 +39,9 @@ aether-render           aether-player  (runtime: model format, player,
 aether-document           |             software renderer)
       |                   |
   aether-rig  <-----------'   (parameters, keyforms, deformers, bones,
-      |                        physics, motions)
+      |      \                 physics, motions)
+      |    aether-live2d       (MOC3 read/write/build, Cubism evaluation
+      |                         and physics)
  aether-raster  (pixmaps, tiles, blending, brush engine, filters, meshes)
       |
   aether-core   (math, colour, blend modes, ids, errors, input)
@@ -201,8 +203,10 @@ changed area dirty, so a blinking eye re-composites a few tiles.
 
 Rest geometry is stored in document space; a vertex's rest position doubles as
 its texture coordinate. Each deformer maps rest-space points, and nesting
-composes the maps; editing tools invert the chain locally (a numerical
-Jacobian) so drags land where the cursor is.
+composes the maps — except that rotations are resolved into final space and
+stay rigid: inside a warp a rotation's pivot follows the warp and it turns
+with the warp's local direction, as in Live2D Cubism. Editing tools invert
+the chain locally (a numerical Jacobian) so drags land where the cursor is.
 
 ## 5d. Runtime
 
@@ -293,6 +297,17 @@ to GIF, APNG, PNG sequences and sprite sheets with a JSON atlas, and rigged
 characters export as runtime models (section 5d). Live2D motions and
 expressions are read and written, translating curves exactly where both
 formats have the shape and fitting Bézier runs where only Aether does.
+
+Live2D Cubism models go both ways through `aether-live2d`, which knows the
+MOC3 format without Cubism Core. Opened models keep their `.moc3` and are
+evaluated by a Rust port of Core's pipeline, held to Core's own output on
+Live2D's sample models (`crates/aether-live2d/oracle`, which runs Core under
+Node for tests only). Exporting an Aether rig lays out a new `.moc3` with
+`aether_live2d::builder`: the hierarchy carries over, each object's keyforms
+are sampled from the rig evaluator with keys added where Cubism's linear
+interpolation would stray (`aether_io::live2d_export::sample`), and the
+result is evaluated as Core would and compared with the editor before it is
+written. Physics is translated and fitted by simulating both engines.
 
 ## 9. Extensibility seams
 

@@ -1240,6 +1240,44 @@ impl EditorState {
         }
     }
 
+    /// Export the document as a Live2D Cubism model into `dir`, and report
+    /// what was approximated.
+    pub fn export_live2d(&mut self, dir: impl AsRef<Path>) -> Result<Vec<String>> {
+        let dir = dir.as_ref();
+        let export = aether_io::live2d_export::export_live2d_to_dir(&self.doc, dir, &Default::default())?;
+        for note in &export.notes {
+            tracing::warn!("Live2D export: {note}");
+        }
+        let path = dir.join(export.model_file());
+        let mut summary = format!("{} {}", self.tr("export.live2d.wrote"), path.display());
+        if let Some(error) = export.max_error {
+            summary.push('\n');
+            summary.push_str(
+                &self
+                    .tr("export.live2d.accuracy")
+                    .replace("{px}", &format!("{error:.1}")),
+            );
+        }
+        self.status = with_notes(
+            format!("Exported Live2D model to {}", path.display()),
+            &export.notes,
+        );
+        self.export_report = Some(crate::state::ExportReport {
+            summary,
+            notes: export.notes.clone(),
+        });
+        Ok(export.notes)
+    }
+
+    /// Ask for a folder, then export the Live2D model into it.
+    pub fn export_live2d_via_dialog(&mut self) {
+        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+            if let Err(error) = self.export_live2d(dir) {
+                self.report_error("Export Live2D model", &error);
+            }
+        }
+    }
+
     // ------------------------------------------------- Live2D interchange
 
     /// Import a Live2D motion (`.motion3.json`) as a new motion, in one undo
@@ -1747,6 +1785,23 @@ mod tests {
         let (model, textures) = aether_io::runtime_model::load_model(dir.path()).expect("load");
         assert_eq!(model.parts.len(), 1);
         assert_eq!(textures.len(), 1);
+    }
+
+    #[test]
+    fn a_live2d_model_exports_from_the_editor_with_a_report() {
+        let mut state = painted_state();
+        state.mesh_all_layers(None).expect("mesh");
+        let dir = tempfile::tempdir().expect("temp dir");
+        state.export_live2d(dir.path()).expect("export");
+        assert!(dir.path().join("rig.model3.json").exists());
+        assert!(dir.path().join("rig.moc3").exists());
+        let report = state.export_report.as_ref().expect("a report to show");
+        assert!(report.summary.contains("rig.model3.json"), "{}", report.summary);
+        assert!(
+            state.status.starts_with("Exported Live2D model"),
+            "{}",
+            state.status
+        );
     }
 
     #[test]

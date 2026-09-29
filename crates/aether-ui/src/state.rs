@@ -181,6 +181,18 @@ pub struct EditorState {
     pub quit_requested: bool,
     /// Rigging and animation state: selection, timeline, live preview.
     pub rig: crate::rigging::RigEditor,
+    /// The result of the last export that has something to say, shown in
+    /// a window until dismissed.
+    pub export_report: Option<ExportReport>,
+}
+
+/// What an export did, for the report window.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExportReport {
+    /// Where it went and what was written.
+    pub summary: String,
+    /// What was approximated or left out.
+    pub notes: Vec<String>,
 }
 
 impl Default for EditorState {
@@ -222,6 +234,7 @@ impl EditorState {
             shortcuts: ShortcutMap::standard(),
             quit_requested: false,
             rig: crate::rigging::RigEditor::default(),
+            export_report: None,
         }
     }
 

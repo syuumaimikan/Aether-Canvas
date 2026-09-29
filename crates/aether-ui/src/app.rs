@@ -288,6 +288,14 @@ impl AetherApp {
                     self.state.export_runtime_model_via_dialog();
                     ui.close();
                 }
+                if ui
+                    .button(lang.tr("menu.file.export_live2d"))
+                    .on_hover_text(lang.tr("menu.file.export_live2d_hint"))
+                    .clicked()
+                {
+                    self.state.export_live2d_via_dialog();
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button(lang.tr("menu.file.quit")).clicked() {
                     self.state.quit_requested = true;
@@ -584,6 +592,7 @@ impl AetherApp {
         self.new_document_dialog(ctx);
         self.filter_dialog(ctx);
         self.about_window(ctx);
+        self.export_report_window(ctx);
         self.shortcuts_window(ctx);
         self.close_confirmation(ctx);
     }
@@ -707,6 +716,41 @@ impl AetherApp {
                 ui.label("so your artwork stays readable with ordinary tools.");
             });
         self.show_about = open;
+    }
+
+    /// What the last export approximated or left out.
+    fn export_report_window(&mut self, ctx: &egui::Context) {
+        let Some(report) = self.state.export_report.clone() else {
+            return;
+        };
+        let lang = self.state.language;
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new(lang.tr("export.report.title"))
+            .collapsible(false)
+            .default_width(460.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(&report.summary);
+                if report.notes.is_empty() {
+                    ui.label(lang.tr("export.report.exact"));
+                } else {
+                    ui.separator();
+                    ui.label(lang.tr("export.report.notes"));
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for note in &report.notes {
+                            ui.label(format!("• {note}"));
+                        }
+                    });
+                }
+                ui.separator();
+                if ui.button(lang.tr("dialog.ok")).clicked() {
+                    close = true;
+                }
+            });
+        if !open || close {
+            self.state.export_report = None;
+        }
     }
 
     fn shortcuts_window(&mut self, ctx: &egui::Context) {

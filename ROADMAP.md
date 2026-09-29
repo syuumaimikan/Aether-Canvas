@@ -101,6 +101,10 @@ arrives with the FFmpeg pipeline of Phase 8.
   standard parameters, and webcam tracking in the web player
 - Live2D interchange: motions (`.motion3.json`) and expressions
   (`.exp3.json`), both ways
+- Live2D Cubism models: open them (evaluated as Cubism Core does, physics as
+  the Cubism Framework runs it) to animate, edit and write back; export
+  Aether rigs as new Cubism models, sampled from Aether's evaluation and
+  checked against Cubism's
 - A wgpu renderer for players, and a GPU pose preview in the editor whenever
   it is exact
 - A Godot 4 package: the `AetherModel2D` node, tested in Godot with all three
