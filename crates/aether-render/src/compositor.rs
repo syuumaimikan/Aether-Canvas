@@ -30,10 +30,18 @@
 //! layer among its siblings, carrying its clipping layers with it. A mesh at
 //! rest draws the layer directly, so binding a mesh never changes a single
 //! pixel until something moves.
+//!
+//! Masks are part of the artwork: a rigged layer's mask moves with it. Its
+//! own mask, and the masks of groups above it, are applied to its pixels
+//! before they are drawn through the mesh — as the runtime model bakes them
+//! into each part — so a face whose outline a mask trims keeps that outline
+//! when it turns. A group with a mask pushes it down to its children only
+//! while something inside it is deformed; otherwise it masks its composite
+//! as usual.
 
 use aether_core::blend::BlendMode;
 use aether_core::color::Rgba8;
-use aether_core::math::IRect;
+use aether_core::math::{IRect, Vec2};
 use aether_core::LayerId;
 use aether_document::layer::{Layer, LayerContent};
 use aether_document::rig::RigPose;
@@ -145,6 +153,43 @@ impl Pass<'_> {
     }
 }
 
+/// The product of `masks`, or `None` when there are none.
+fn combine_masks<'m>(masks: impl IntoIterator<Item = &'m Mask>) -> Option<Cow<'m, Mask>> {
+    let mut masks = masks.into_iter();
+    let first = masks.next()?;
+    let mut combined = Cow::Borrowed(first);
+    for mask in masks {
+        combined.to_mut().multiply(mask);
+    }
+    Some(combined)
+}
+
+/// The `region` of `pixmap`, its alpha scaled by `mask` (which covers the
+/// whole document).
+fn masked_crop(pixmap: &Pixmap, mask: &Mask, region: IRect) -> Pixmap {
+    let mut out = pixmap.copy_rect(region);
+    for y in 0..out.height() as i32 {
+        for x in 0..out.width() as i32 {
+            let px = out.get(x, y);
+            if px.a == 0 {
+                continue;
+            }
+            let coverage = mask.get(x + region.x, y + region.y) as u32;
+            let a = ((px.a as u32 * coverage + 127) / 255) as u8;
+            out.set(
+                x,
+                y,
+                if a == 0 {
+                    Rgba8::TRANSPARENT
+                } else {
+                    Rgba8::new(px.r, px.g, px.b, a)
+                },
+            );
+        }
+    }
+    out
+}
+
 impl Compositor {
     /// A compositor with no plugin renderers registered.
     pub fn new() -> Self {
@@ -201,7 +246,7 @@ impl Compositor {
         }
 
         let pass = self.pass(doc, options, region);
-        self.composite_children(&pass, None, target);
+        self.composite_children(&pass, None, target, &[]);
     }
 
     /// Composite one layer on its own, ignoring the rest of the tree.
@@ -218,7 +263,7 @@ impl Compositor {
             return target;
         };
         let pass = self.pass(doc, &options, doc.bounds());
-        if let Some(source) = self.layer_source(&pass, layer, &target) {
+        if let Some(source) = self.layer_source(&pass, layer, &target, &[]) {
             let opts = CompositeOptions {
                 blend: BlendMode::Normal,
                 opacity: 1.0,
@@ -231,8 +276,15 @@ impl Compositor {
         target
     }
 
-    /// Composite the children of `parent` onto `backdrop`.
-    fn composite_children(&self, pass: &Pass, parent: Option<LayerId>, backdrop: &mut Pixmap) {
+    /// Composite the children of `parent` onto `backdrop`. `masks` are group
+    /// masks pushed down from above (see the module documentation).
+    fn composite_children(
+        &self,
+        pass: &Pass,
+        parent: Option<LayerId>,
+        backdrop: &mut Pixmap,
+        masks: &[&Mask],
+    ) {
         let doc = pass.doc;
         let children: &[LayerId] = doc.layers.children_of(parent);
 
@@ -269,9 +321,9 @@ impl Compositor {
                 continue;
             }
             if clip_run.is_empty() {
-                self.composite_layer(pass, layer, backdrop);
+                self.composite_layer(pass, layer, backdrop, masks);
             } else {
-                self.composite_clipping_group(pass, layer, clip_run, backdrop);
+                self.composite_clipping_group(pass, layer, clip_run, backdrop, masks);
             }
         }
     }
@@ -289,8 +341,46 @@ impl Compositor {
         false
     }
 
+    /// A raster layer drawn through a deformed mesh: its masks go into its
+    /// pixels before drawing.
+    fn bakes_masks(pass: &Pass, layer: &Layer) -> bool {
+        matches!(layer.content, LayerContent::Raster(_))
+            && pass.deformed(layer.id).is_some()
+            && pass.doc.rig.mesh(layer.id).is_some()
+    }
+
+    /// A group with a mask over deformed layers hands the mask down to them.
+    fn pushes_mask(pass: &Pass, layer: &Layer) -> bool {
+        matches!(layer.content, LayerContent::Group(_))
+            && layer.active_mask().is_some()
+            && pass.pose.is_some()
+            && pass
+                .doc
+                .layers
+                .subtree_ids(layer.id)
+                .iter()
+                .any(|id| pass.deformed(*id).is_some())
+    }
+
+    /// The mask a layer is blended through in document space: its own
+    /// (unless it went into rigged pixels or down to a group's children)
+    /// and those pushed down from groups above.
+    fn blend_mask<'m>(pass: &Pass, layer: &'m Layer, masks: &[&'m Mask]) -> Option<Cow<'m, Mask>> {
+        if Self::bakes_masks(pass, layer) {
+            return None;
+        }
+        let inherited: &[&Mask] = if matches!(layer.content, LayerContent::Group(_)) {
+            // A group's children took the pushed-down masks already.
+            &[]
+        } else {
+            masks
+        };
+        let own = layer.active_mask().filter(|_| !Self::pushes_mask(pass, layer));
+        combine_masks(own.into_iter().chain(inherited.iter().copied()))
+    }
+
     /// Blend one layer into the backdrop.
-    fn composite_layer(&self, pass: &Pass, layer: &Layer, backdrop: &mut Pixmap) {
+    fn composite_layer(&self, pass: &Pass, layer: &Layer, backdrop: &mut Pixmap, masks: &[&Mask]) {
         // A pass-through group blends its children straight into the backdrop.
         if let LayerContent::Group(group) = &layer.content {
             let needs_isolation = group.isolate
@@ -298,7 +388,7 @@ impl Compositor {
                 || layer.blend_mode != BlendMode::Normal
                 || layer.active_mask().is_some();
             if !needs_isolation {
-                self.composite_children(pass, Some(layer.id), backdrop);
+                self.composite_children(pass, Some(layer.id), backdrop, masks);
                 return;
             }
         }
@@ -307,7 +397,7 @@ impl Compositor {
         if limit.is_empty() {
             return;
         }
-        let Some(source) = self.layer_source(pass, layer, backdrop) else {
+        let Some(source) = self.layer_source(pass, layer, backdrop, masks) else {
             return;
         };
         let opts = CompositeOptions {
@@ -317,7 +407,8 @@ impl Compositor {
             region: Some(limit),
             alpha_lock: false,
         };
-        composite_pixmap(backdrop, &source, &opts, layer.active_mask());
+        let mask = Self::blend_mask(pass, layer, masks);
+        composite_pixmap(backdrop, &source, &opts, mask.as_deref());
     }
 
     /// Composite a base layer plus the clipping layers riding on it.
@@ -327,13 +418,14 @@ impl Compositor {
         base: &Layer,
         clipped: &[LayerId],
         backdrop: &mut Pixmap,
+        masks: &[&Mask],
     ) {
         // Nothing in the group can show outside the base.
         let limit = pass.content_limit(base);
         if limit.is_empty() {
             return;
         }
-        let Some(base_pixels) = self.layer_source(pass, base, backdrop) else {
+        let Some(base_pixels) = self.layer_source(pass, base, backdrop, masks) else {
             return;
         };
         // The clipping shape is the base layer's own alpha.
@@ -347,12 +439,13 @@ impl Compositor {
             if self.is_hidden(pass, layer) {
                 continue;
             }
-            let Some(source) = self.layer_source(pass, layer, &group) else {
+            // Masks from above reach the clipped layers through the base.
+            let Some(source) = self.layer_source(pass, layer, &group, &[]) else {
                 continue;
             };
             let mut mask = clip_mask.clone();
-            if let Some(layer_mask) = layer.active_mask() {
-                mask.multiply(layer_mask);
+            if let Some(layer_mask) = Self::blend_mask(pass, layer, &[]) {
+                mask.multiply(&layer_mask);
             }
             let opts = CompositeOptions {
                 blend: layer.blend_mode,
@@ -371,7 +464,8 @@ impl Compositor {
             region: Some(limit),
             alpha_lock: false,
         };
-        composite_pixmap(backdrop, &group, &opts, base.active_mask());
+        let mask = Self::blend_mask(pass, base, masks);
+        composite_pixmap(backdrop, &group, &opts, mask.as_deref());
     }
 
     /// Produce the pixels a layer contributes, in document space.
@@ -384,12 +478,31 @@ impl Compositor {
         pass: &'p Pass,
         layer: &'p Layer,
         backdrop: &Pixmap,
+        masks: &[&Mask],
     ) -> Option<Cow<'p, Pixmap>> {
         let doc = pass.doc;
         let region = pass.region;
         let source: Cow<'p, Pixmap> = match &layer.content {
             LayerContent::Raster(raster) => match (pass.deformed(layer.id), doc.rig.mesh(layer.id)) {
                 (Some(pose), Some(mesh)) => {
+                    // The layer's masks travel with its pixels: mask the part
+                    // of the texture the mesh covers, and sample that.
+                    let (texture, uvs): (Cow<Pixmap>, Cow<[Vec2]>) =
+                        match combine_masks(layer.active_mask().into_iter().chain(masks.iter().copied())) {
+                            Some(mask) => {
+                                let area = mesh
+                                    .bounds()
+                                    .to_irect_outer()
+                                    .expanded(2)
+                                    .intersect(&raster.pixmap.bounds());
+                                let origin = Vec2::new(area.x as f32, area.y as f32);
+                                (
+                                    Cow::Owned(masked_crop(&raster.pixmap, &mask, area)),
+                                    Cow::Owned(mesh.vertices.iter().map(|v| *v - origin).collect()),
+                                )
+                            }
+                            None => (Cow::Borrowed(&raster.pixmap), Cow::Borrowed(&mesh.vertices[..])),
+                        };
                     let mut deformed = Pixmap::new(doc.width, doc.height);
                     let opts = MeshDrawOptions {
                         region: pass.content_limit(layer),
@@ -400,9 +513,9 @@ impl Compositor {
                     };
                     draw_textured_mesh(
                         &mut deformed,
-                        &raster.pixmap,
+                        &texture,
                         &pose.positions,
-                        &mesh.vertices,
+                        &uvs,
                         &mesh.triangles,
                         &opts,
                     );
@@ -445,7 +558,11 @@ impl Compositor {
             LayerContent::Group(_) => {
                 // Isolated group: composite the children onto an empty buffer.
                 let mut buffer = Pixmap::new(doc.width, doc.height);
-                self.composite_children(pass, Some(layer.id), &mut buffer);
+                let mut inner: Vec<&Mask> = masks.to_vec();
+                if Self::pushes_mask(pass, layer) {
+                    inner.extend(layer.active_mask());
+                }
+                self.composite_children(pass, Some(layer.id), &mut buffer, &inner);
                 Cow::Owned(buffer)
             }
             LayerContent::Custom { kind, .. } => {
@@ -1040,6 +1157,50 @@ mod rig_tests {
         };
         let out = Compositor::new().render_with(&doc, &options);
         assert_eq!(out.get(10, 10), Rgba8::rgb(255, 0, 0));
+    }
+
+    /// A mask keeping the left half of the rigged square (x < 12).
+    fn left_half_mask() -> aether_raster::Mask {
+        let mut mask = aether_raster::Mask::new(64, 64);
+        mask.fill_rect(IRect::new(0, 0, 12, 64), 255);
+        mask
+    }
+
+    #[test]
+    fn a_rigged_layers_mask_moves_with_it() {
+        let (mut doc, id, param) = rigged_square();
+        doc.layers.get_mut(id).unwrap().mask = Some(left_half_mask());
+        let rest = Compositor::new().render(&doc);
+        assert_eq!(rest.get(9, 10), Rgba8::rgb(255, 0, 0));
+        assert_eq!(rest.get(14, 10).a, 0, "masked at rest");
+
+        doc.rig.set_value(param, 1.0);
+        let out = Compositor::new().render(&doc);
+        assert_eq!(out.get(39, 10), Rgba8::rgb(255, 0, 0), "the kept half slid along");
+        assert_eq!(out.get(44, 10).a, 0, "and the masked half stays hidden");
+    }
+
+    #[test]
+    fn a_group_mask_over_a_rigged_layer_moves_with_it() {
+        // The rigged square again, inside a masked group.
+        let (square, id, param) = rigged_square();
+        let mut doc = Document::empty(64, 64, "rig");
+        doc.ids = square.ids.clone();
+        let group = doc.next_layer_id();
+        let mut g = Layer::group(group, "G");
+        g.mask = Some(left_half_mask());
+        doc.layers.push_top(g).expect("group");
+        let layer = square.layers.get(id).expect("layer").clone();
+        doc.layers.insert(layer, Some(group), 0).expect("child");
+        doc.rig = square.rig.clone();
+        let rest = Compositor::new().render(&doc);
+        assert_eq!(rest.get(9, 10), Rgba8::rgb(255, 0, 0));
+        assert_eq!(rest.get(14, 10).a, 0);
+
+        doc.rig.set_value(param, 1.0);
+        let out = Compositor::new().render(&doc);
+        assert_eq!(out.get(39, 10), Rgba8::rgb(255, 0, 0));
+        assert_eq!(out.get(44, 10).a, 0);
     }
 
     #[test]
