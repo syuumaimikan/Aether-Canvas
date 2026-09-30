@@ -14,6 +14,7 @@ aether-raster.workspace = true
 aether-document.workspace = true
 aether-render.workspace = true
 aether-io.workspace = true
+aether-samples.workspace = true
 aether-player.workspace = true
 aether-player-wgpu.workspace = true
 wgpu.workspace = true

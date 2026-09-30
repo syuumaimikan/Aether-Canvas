@@ -160,6 +160,18 @@ model's textures are not listed separately. Cubism Editor projects
 (`.cmo3`, `.can3`) cannot be opened; their exported runtime models
 (`.model3.json`) can.
 
+### Built-in characters
+
+Two rigged characters come with the editor: open them from **Help › Sample
+characters** or the top of the sample library.
+
+* **Luna** — a finished illustration and a sheet of parts, rigged the way
+  most commissioned models are: a 3D head turn, blinking and smiling eyes,
+  eyes that look around, five mouth shapes, blush, hair and tassel physics,
+  breathing, six expressions and six motions, all on hotkeys.
+* **Aether-chan** — painted in parts and auto rigged, then given smiling
+  eyes, expressions and motions by hand.
+
 ### The sample library
 
 **File › Sample library…** lists everything that can be opened in a folder
@@ -280,6 +292,30 @@ PSDs split into materials, like the Live2D samples, work as they are:
 
 Motions and expressions import and export as Live2D `.motion3.json` and
 `.exp3.json`, to use Aether's timeline with Live2D models.
+
+### Hotkeys
+
+Like VTube Studio, a model can have **hotkeys**: keys that play a motion or
+switch an expression while it performs. **Window › Hotkeys** opens the
+panel (it is also in the Rigging and Animation workspaces).
+
+* **Usual keys** puts the motions on `1`–`9`, the expressions on
+  `Shift+1`–`Shift+9` and a reset on `0`. **Add** adds one key at a time.
+* Click a hotkey's keys, then press the new ones (`Esc` cancels). The menu
+  beside it chooses what the key does: play a motion, switch an expression,
+  clear the expressions, stop the motions or reset.
+* Press the keys over the canvas: **Live preview** comes on and the model
+  moves as it will in an app. A motion that plays once plays over the idle
+  loop and hands back to it; a looping motion becomes the idle loop, and its
+  key stops it. Expressions switched by key stack, and their key switches
+  them off again. ▶ tries a hotkey with the mouse.
+* A hotkey on a key the editor uses itself (`B` picks the brush) works only
+  while Live preview is on, so painting keeps its keys.
+
+Hotkeys are saved with the project and exported with runtime models: the
+web player (`player.listenForHotkeys()`), Unity and Godot answer the same
+keys. In VTube Studio, set hotkeys in VTube Studio itself; the motions and
+expressions the Live2D export writes appear in its lists.
 
 ## Live2D models and VTube Studio
 

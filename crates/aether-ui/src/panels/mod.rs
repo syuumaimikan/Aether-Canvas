@@ -15,6 +15,7 @@
 //! * [`rig_panel`] – the rig hierarchy, inspector and generators
 //! * [`timeline`] – motions, keyframes, lip sync and animation export
 //! * [`dynamics`] – physics, behaviours, drivers and expressions
+//! * [`hotkeys`] – keys that play motions and switch expressions
 
 pub mod adjust;
 pub mod brush;
@@ -23,6 +24,7 @@ pub mod dynamics;
 pub mod effects;
 pub mod helpers;
 pub mod history;
+pub mod hotkeys;
 pub mod layers;
 pub mod parameters;
 pub mod rig_panel;
@@ -42,6 +44,7 @@ pub use dynamics::dynamics_panel;
 pub use effects::effects_section;
 pub use helpers::{blend_mode_combo, commit_controls, from_color32, to_color32};
 pub use history::{history_panel, properties_panel};
+pub use hotkeys::hotkeys_panel;
 pub use layers::layers_panel;
 pub use parameters::parameters_panel;
 pub use rig_panel::rig_panel;

@@ -259,6 +259,14 @@ impl AetherApp {
                 self.state.export_runtime_model_via_dialog();
                 Ok(())
             }
+            Help::Hotkeys => {
+                self.focus_panel(PanelKind::Hotkeys);
+                if self.state.doc.rig.hotkeys.is_empty() {
+                    self.state.assign_default_hotkeys().map(|_| ())
+                } else {
+                    Ok(())
+                }
+            }
         };
         if let Err(error) = result {
             self.state.report_error("Tutorial", &error);
@@ -476,6 +484,11 @@ impl AetherApp {
             });
 
             ui.menu_button(lang.tr("menu.window"), |ui| {
+                if ui.button(lang.tr("menu.window.hotkeys")).clicked() {
+                    self.focus_panel(PanelKind::Hotkeys);
+                    ui.close();
+                }
+                ui.separator();
                 ui.menu_button(lang.tr("menu.window.theme"), |ui| {
                     for theme in Theme::ALL {
                         let selected = self.state.theme == theme;
@@ -501,6 +514,16 @@ impl AetherApp {
                     self.state.open_tutorials();
                     ui.close();
                 }
+                ui.menu_button(lang.tr("menu.help.samples"), |ui| {
+                    for (i, (name, hint)) in crate::library::BUILT_IN.iter().enumerate() {
+                        if ui.button(*name).on_hover_text(lang.tr(hint)).clicked() {
+                            if let Err(e) = self.state.open_built_in_sample(i) {
+                                self.state.report_error("Sample", &e);
+                            }
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button(lang.tr("menu.help.shortcuts")).clicked() {
                     self.show_shortcuts = true;
                     ui.close();
@@ -952,8 +975,13 @@ impl AetherApp {
         self.apply_theme(&ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.state.title()));
 
-        if let Some(action) = self.state.shortcuts.consume(&ctx) {
-            self.run(action);
+        // A hotkey waiting for its keys takes the next press; the model's
+        // hotkeys come before the editor's shortcuts (see crate::hotkeys).
+        if !self.state.capture_hotkey_keys(&ctx) {
+            self.state.handle_hotkeys(&ctx);
+            if let Some(action) = self.state.shortcuts.consume(&ctx) {
+                self.run(action);
+            }
         }
 
         // Files dropped on the window open like File ▸ Open.

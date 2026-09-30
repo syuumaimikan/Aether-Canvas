@@ -69,6 +69,12 @@ project, one document model and one timeline.
 - Timeline with step/linear/Bézier/ease/back/elastic/bounce/spring keys,
   layered motions with crossfades, expressions, auto-blink, breathing,
   look-at and lip sync baked from WAV
+- **Hotkeys**, as in VTube Studio (Window ▸ *Hotkeys*): keys that play
+  motions over an idle loop and switch stacking expressions, tried live in
+  the editor and answered by every player (web, Unity, Godot, C)
+- 3D head turns on a skull shaped from the face, with depth layers: the
+  features and fringe move a little further than the face, the back hair
+  the other way, and the chin stays with the face when nodding
 - Rigged layers keep every blend mode, mask, clipping group and effect;
   masks move with the parts they trim
 - Export GIF, APNG (full colour, soft transparency), PNG sequences and
@@ -83,6 +89,9 @@ project, one document model and one timeline.
   vertex against Cubism's own evaluation
 - Import and export Live2D motions (`.motion3.json`) and expressions
   (`.exp3.json`) on their own
+- Two rigged sample characters built in (Help ▸ *Sample characters*):
+  **Luna**, rigged from a finished illustration and a parts sheet, and
+  Aether-chan, painted in parts and auto-rigged
 - An honest comparison with Live2D Cubism is in
   [docs/RIGGING.md](docs/RIGGING.md#compared-with-live2d-cubism)
 
@@ -93,8 +102,8 @@ project, one document model and one timeline.
   into a rigged, playable model in one command
 - One runtime, `aether-player`, running the editor's own rig code: every rig
   feature — bones and IK, drivers, jiggle, physics, motions, expressions,
-  blink, breath, look-at, lip sync, motion events, hit testing — plays back
-  identically
+  blink, breath, look-at, lip sync, motion events, hotkeys, hit testing —
+  plays back identically
 - Web player: WebAssembly (≈190 KB gzipped) + WebGL 1/2, a drop-in
   `<canvas>` component with pointer following, tap events and microphone lip
   sync; about 0.8 ms per frame for the demo character

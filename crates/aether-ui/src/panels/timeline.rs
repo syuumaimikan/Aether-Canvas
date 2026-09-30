@@ -108,6 +108,8 @@ fn motion_bar(ui: &mut Ui, state: &mut EditorState) {
             );
             if motion != before {
                 let r = state.edit_rig("Motion settings", Some(format!("motion:{m}")), |rig, _| {
+                    // Hotkeys follow a renamed motion.
+                    aether_document::rig::hotkey::rename_motion(&mut rig.hotkeys, &before.name, &motion.name);
                     if let Some(slot) = rig.motions.get_mut(m) {
                         *slot = motion;
                     }

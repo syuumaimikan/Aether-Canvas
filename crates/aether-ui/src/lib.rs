@@ -12,6 +12,7 @@ pub mod canvas;
 pub mod dock;
 pub mod fonts;
 pub mod gpu_preview;
+pub mod hotkeys;
 pub mod i18n;
 pub mod icons;
 pub mod library;

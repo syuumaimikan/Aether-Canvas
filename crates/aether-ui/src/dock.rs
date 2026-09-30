@@ -34,6 +34,8 @@ pub enum PanelKind {
     Timeline,
     /// Physics, behaviours, drivers and expressions.
     Dynamics,
+    /// Keys that play motions and switch expressions.
+    Hotkeys,
 }
 
 impl PanelKind {
@@ -51,6 +53,7 @@ impl PanelKind {
             PanelKind::Rig => "rig.title",
             PanelKind::Timeline => "timeline.title",
             PanelKind::Dynamics => "dyn.title",
+            PanelKind::Hotkeys => "hotkey.title",
         }
     }
 }
@@ -110,7 +113,7 @@ pub fn layout_for(workspace: Workspace) -> DockState<PanelKind> {
             dock.main_surface_mut().split_below(
                 right,
                 0.46,
-                vec![PanelKind::Parameters, PanelKind::Dynamics],
+                vec![PanelKind::Parameters, PanelKind::Dynamics, PanelKind::Hotkeys],
             );
         }
         Workspace::Animation => {
@@ -120,7 +123,12 @@ pub fn layout_for(workspace: Workspace) -> DockState<PanelKind> {
             let [canvas, _right] = dock.main_surface_mut().split_right(
                 canvas,
                 0.72,
-                vec![PanelKind::Parameters, PanelKind::Dynamics, PanelKind::Layers],
+                vec![
+                    PanelKind::Parameters,
+                    PanelKind::Dynamics,
+                    PanelKind::Hotkeys,
+                    PanelKind::Layers,
+                ],
             );
             dock.main_surface_mut()
                 .split_below(canvas, 0.64, vec![PanelKind::Timeline]);
@@ -157,6 +165,7 @@ impl egui_dock::TabViewer for PanelViewer<'_> {
             PanelKind::Rig => panels::rig_panel(ui, self.state),
             PanelKind::Timeline => panels::timeline_panel(ui, self.state),
             PanelKind::Dynamics => panels::dynamics_panel(ui, self.state),
+            PanelKind::Hotkeys => panels::hotkeys_panel(ui, self.state),
         }
     }
 
@@ -219,7 +228,7 @@ mod tests {
             assert!(rigging.contains(&expected), "rigging is missing {expected:?}");
         }
         let animation = tabs(&layout_for(Workspace::Animation));
-        for expected in [PanelKind::Timeline, PanelKind::Parameters] {
+        for expected in [PanelKind::Timeline, PanelKind::Parameters, PanelKind::Hotkeys] {
             assert!(animation.contains(&expected), "animation is missing {expected:?}");
         }
     }
@@ -238,6 +247,7 @@ mod tests {
             PanelKind::Rig,
             PanelKind::Timeline,
             PanelKind::Dynamics,
+            PanelKind::Hotkeys,
         ] {
             assert_ne!(
                 crate::Language::English.tr(kind.title_key()),

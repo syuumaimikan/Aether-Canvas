@@ -172,6 +172,7 @@ dependencies = [
  "aether-player-wgpu",
  "aether-raster",
  "aether-render",
+ "aether-samples",
  "eframe",
  "egui",
  "egui_dock",

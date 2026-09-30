@@ -297,6 +297,8 @@ fn acting(rig: &mut Rig) -> Result<()> {
         )?,
     ];
     rig.motions.extend(motions);
+    // Motions on 1–9, expressions on Shift+1–9, 0 back to the plain pose.
+    rig.hotkeys = aether_document::rig::hotkey::default_hotkeys(rig);
     Ok(())
 }
 

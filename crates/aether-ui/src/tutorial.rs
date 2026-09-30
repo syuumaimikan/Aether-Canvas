@@ -34,6 +34,9 @@ pub enum Help {
     ExportLive2D,
     /// Export a runtime model (asks where).
     ExportRuntime,
+    /// Show the Hotkeys panel, giving the motions and expressions the
+    /// usual keys when there are none.
+    Hotkeys,
 }
 
 /// Counts taken as a step starts, so it can tell what changed since.
@@ -124,6 +127,9 @@ fn rigged(s: &EditorState, _: &Baseline) -> bool {
 fn animatable(s: &EditorState, _: &Baseline) -> bool {
     !s.doc.rig.parameters.is_empty() && (!s.doc.rig.deformers.is_empty() || !s.doc.rig.cubism.is_empty())
 }
+fn hotkey_fired(s: &EditorState, _: &Baseline) -> bool {
+    s.rig.last_hotkey.is_some()
+}
 fn head_turned(s: &EditorState, _: &Baseline) -> bool {
     value(s, "AngleX").is_some_and(|v| v.abs() > 5.0)
 }
@@ -206,6 +212,7 @@ pub static TUTORIALS: &[Tutorial] = &[
             step("motion", Some(motion_added), Some(Help::AddMotion)),
             step("keys", Some(keyed), None),
             step("play", Some(playing), Some(Help::Run(Action::PlayPause))),
+            step("hotkeys", Some(hotkey_fired), Some(Help::Hotkeys)),
         ],
     },
     Tutorial {

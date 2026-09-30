@@ -162,6 +162,10 @@ pub struct RigEditor {
     pub name_draft: String,
     /// Generator and inspector choices.
     pub generator: GeneratorSettings,
+    /// The hotkey whose keys the next key press sets.
+    pub capture_hotkey: Option<usize>,
+    /// The hotkey that fired last, to highlight it.
+    pub last_hotkey: Option<usize>,
 }
 
 impl Default for RigEditor {
@@ -191,6 +195,8 @@ impl Default for RigEditor {
             editing_driver: None,
             name_draft: String::new(),
             generator: GeneratorSettings::default(),
+            capture_hotkey: None,
+            last_hotkey: None,
         }
     }
 }

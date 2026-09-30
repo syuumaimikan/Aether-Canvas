@@ -1042,6 +1042,8 @@ fn acting(rig: &mut Rig) -> Result<()> {
         )?,
     ];
     rig.motions.extend(motions);
+    // Motions on 1–9, expressions on Shift+1–9, 0 back to the plain pose.
+    rig.hotkeys = aether_document::rig::hotkey::default_hotkeys(rig);
     Ok(())
 }
 
@@ -1105,6 +1107,8 @@ mod tests {
         assert_eq!(rig.physics.len(), 3);
         assert_eq!(rig.expressions.len(), 6);
         assert_eq!(rig.motions.len(), 6);
+        assert_eq!(rig.hotkeys.len(), 13, "six motions, six expressions and a reset");
+        assert!(rig.hotkeys.iter().all(|h| h.is_valid(rig)));
 
         // At rest every layer that shows is exactly as drawn, and only the
         // rest mouth and the open eyes show. (Hidden mouth shapes wait

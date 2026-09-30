@@ -18,6 +18,7 @@ use crate::state::EditorState;
 use aether_core::Result;
 use aether_io::archive::{Archive, ArchiveEntry, EntryKind, Opened};
 use aether_io::library::LibraryItem;
+use egui::RichText;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 
@@ -281,12 +282,23 @@ pub fn library_window(state: &mut EditorState, ctx: &egui::Context) {
     let mut chosen: Option<LibraryItem> = None;
     let mut choose_folder = false;
     let mut rescan = false;
+    let mut built_in = None;
     egui::Window::new(lang.tr("library.title"))
         .id(egui::Id::new("sample-library"))
         .default_width(560.0)
         .default_height(480.0)
         .open(&mut open)
         .show(ctx, |ui| {
+            // The characters that come with the editor, ready to play.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(lang.tr("library.built_in")).strong());
+                for (i, (name, hint)) in BUILT_IN.iter().enumerate() {
+                    if ui.button(*name).on_hover_text(lang.tr(hint)).clicked() {
+                        built_in = Some(i);
+                    }
+                }
+            });
+            ui.separator();
             ui.horizontal(|ui| {
                 ui.label(lang.tr("library.folder"));
                 let folder = state
@@ -371,6 +383,42 @@ pub fn library_window(state: &mut EditorState, ctx: &egui::Context) {
     }
     if let Some(item) = chosen {
         state.open_library_item(&item);
+    }
+    if let Some(which) = built_in {
+        if let Err(e) = state.open_built_in_sample(which) {
+            state.report_error("Sample", &e);
+        }
+    }
+}
+
+/// The characters built into the editor: name and hint key.
+pub const BUILT_IN: [(&str, &str); 2] = [
+    ("Luna", "library.luna_hint"),
+    ("Aether-chan", "library.aether_chan_hint"),
+];
+
+impl EditorState {
+    /// Open built-in sample character `which` (see [`BUILT_IN`]): rigged,
+    /// with expressions, motions and hotkeys.
+    pub fn open_built_in_sample(&mut self, which: usize) -> Result<()> {
+        let doc = match which {
+            0 => aether_samples::luna()?,
+            _ => aether_samples::aether_chan()?,
+        };
+        self.set_document(doc, None);
+        self.library.open = false;
+        let rig = &self.doc.rig;
+        self.status = format!(
+            "{}: {} {}, {} {}, {} {}",
+            self.doc.name,
+            rig.motions.len(),
+            self.tr("library.motions"),
+            rig.expressions.len(),
+            self.tr("library.expressions"),
+            rig.hotkeys.len(),
+            self.tr("library.hotkeys"),
+        );
+        Ok(())
     }
 }
 
@@ -497,5 +545,18 @@ mod tests {
         assert!(state.archive_choice.is_none(), "one thing opens straight away");
         wait(&mut state);
         assert_eq!(state.doc.name, "only");
+    }
+
+    #[test]
+    fn the_built_in_characters_open_ready_to_play() {
+        let mut state = EditorState::default();
+        state.open_built_in_sample(0).expect("Luna");
+        assert_eq!(state.doc.name, "Luna");
+        assert!(state.status.contains("13"), "{}", state.status);
+        let two = aether_document::rig::KeyChord::key("2").unwrap();
+        assert_eq!(state.press_hotkey(&two), Some(1), "2 greets");
+        assert!(state.rig.simulate);
+        state.open_built_in_sample(1).expect("Aether-chan");
+        assert!(!state.doc.rig.hotkeys.is_empty());
     }
 }
