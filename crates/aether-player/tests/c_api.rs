@@ -85,6 +85,11 @@ fn model_json() -> String {
             clipped: vec![],
         },
     ];
+    model.rig.motions.push(aether_rig::Motion::new("Wave", 1.0, 30.0));
+    model.rig.hotkeys.push(aether_rig::Hotkey::new(
+        aether_rig::KeyChord::parse("1").expect("key"),
+        aether_rig::HotkeyAction::PlayMotion("Wave".into()),
+    ));
     model.to_json()
 }
 
@@ -158,4 +163,6 @@ fn a_c_program_plays_a_model() {
     );
     assert!(stdout.contains("2 draw calls, 4 triangles"), "{stdout}");
     assert!(stdout.contains("hit at centre: Front"), "{stdout}");
+    assert!(stdout.contains("hotkey 1: Wave"), "{stdout}");
+    assert!(stdout.contains("pressed 1: hotkey 0"), "{stdout}");
 }

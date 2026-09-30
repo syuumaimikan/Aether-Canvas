@@ -121,6 +121,11 @@ export class AetherModel {
       duration: e.aether_player_motion_duration(h, index),
     }));
     this.expressions = list(e.aether_player_expression_count, e.aether_player_expression_name);
+    this.hotkeys = list(e.aether_player_hotkey_count, e.aether_player_hotkey_name).map((name, index) => ({
+      index,
+      name,
+      keys: runtime.readString(e.aether_player_hotkey_keys(h, index, s)),
+    }));
     this.parts = list(e.aether_player_part_count, e.aether_player_part_name).map((name, index) => {
       const vertices = e.aether_player_part_vertex_count(h, index);
       const indices = e.aether_player_part_index_count(h, index);
@@ -178,6 +183,46 @@ export class AetherModel {
     const i =
       nameOrIndex == null ? -1 : typeof nameOrIndex === 'number' ? nameOrIndex : this.expressions.indexOf(nameOrIndex);
     this.runtime.exports.aether_player_set_expression(this.handle, i);
+  }
+
+  expressionIndex(nameOrIndex) {
+    return typeof nameOrIndex === 'number' ? nameOrIndex : this.expressions.indexOf(nameOrIndex);
+  }
+
+  /** Switch an expression on or off, leaving the others: several can show at once. */
+  toggleExpression(nameOrIndex) {
+    const i = this.expressionIndex(nameOrIndex);
+    if (i >= 0) this.runtime.exports.aether_player_toggle_expression(this.handle, i);
+  }
+
+  /** True while an expression is switched on. */
+  expressionActive(nameOrIndex) {
+    const i = this.expressionIndex(nameOrIndex);
+    return i >= 0 && this.runtime.exports.aether_player_expression_active(this.handle, i) === 1;
+  }
+
+  /** Carry out a hotkey (by index, name or keys such as "Shift+1") as if its key were pressed. */
+  triggerHotkey(which) {
+    const i =
+      typeof which === 'number' ? which : this.hotkeys.findIndex((k) => k.name === which || k.keys === which);
+    return i >= 0 && this.runtime.exports.aether_player_trigger_hotkey(this.handle, i) === 1;
+  }
+
+  /**
+   * A key was pressed: trigger the hotkey bound to it. `key` is a name such
+   * as "1", "A", "F5" or "Space", or a KeyboardEvent's `code` ("Digit1",
+   * "KeyA"). Returns the hotkey that fired, or null.
+   */
+  pressKey(key, { ctrl = false, shift = false, alt = false } = {}) {
+    const bytes = encoder.encode(key);
+    if (!bytes.length) return null;
+    const e = this.runtime.exports;
+    const ptr = e.aether_alloc(bytes.length);
+    new Uint8Array(e.memory.buffer, ptr, bytes.length).set(bytes);
+    const modifiers = (ctrl ? 1 : 0) | (shift ? 2 : 0) | (alt ? 4 : 0);
+    const index = e.aether_player_press_key(this.handle, ptr, bytes.length, modifiers);
+    e.aether_dealloc(ptr, bytes.length);
+    return index >= 0 ? this.hotkeys[index] : null;
   }
 
   /** Look towards (x, y) in -1..1, y up; null looks ahead. */
@@ -674,16 +719,47 @@ export class AetherPlayer {
   get parameters() { return this.model.parameters; }
   get motions() { return this.model.motions; }
   get expressions() { return this.model.expressions; }
+  get hotkeys() { return this.model.hotkeys; }
   setParameter(name, value) { this.model.setParameter(name, value); }
   parameter(name) { return this.model.parameter(name); }
   playMotion(name, options) { return this.model.playMotion(name, options); }
   stopMotions() { this.model.stopMotions(); }
   setExpression(name) { this.model.setExpression(name); }
+  toggleExpression(name) { this.model.toggleExpression(name); }
+  expressionActive(name) { return this.model.expressionActive(name); }
+  triggerHotkey(which) { return this.model.triggerHotkey(which); }
+  pressKey(key, modifiers) { return this.model.pressKey(key, modifiers); }
   lookAt(x, y) { this.model.lookAt(x, y); }
   setStage(stage, enabled) { this.model.setStage(stage, enabled); }
   reset() { this.model.reset(); }
 
-  /** Subscribe: 'event' (motion events: { name, motion }), 'hit' ({ part, x, y }), 'frame' (dt). */
+  /**
+   * Play motions and switch expressions from the keyboard, with the keys
+   * the model was given in the editor. Keys typed into text fields are left
+   * alone. Emits 'hotkey' ({ index, name, keys }) for each one that fires.
+   * @returns {() => void} Stops listening.
+   */
+  listenForHotkeys({ element = globalThis } = {}) {
+    const down = (event) => {
+      if (event.repeat || event.defaultPrevented) return;
+      const t = event.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName ?? ''))) return;
+      const modifiers = { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey, alt: event.altKey };
+      // The physical key first ("Digit1" stays 1 with Shift held), then the printed one.
+      const hotkey = this.model.pressKey(event.code || event.key, modifiers) ??
+        (event.code && event.key ? this.model.pressKey(event.key, modifiers) : null);
+      if (hotkey) {
+        event.preventDefault();
+        this.emit('hotkey', hotkey);
+      }
+    };
+    element.addEventListener('keydown', down);
+    const stop = () => element.removeEventListener('keydown', down);
+    this.cleanups.push(stop);
+    return stop;
+  }
+
+  /** Subscribe: 'event' (motion events: { name, motion }), 'hit' ({ part, x, y }), 'frame' (dt), 'hotkey' ({ index, name, keys }). */
   on(type, callback) {
     if (!this.listeners.has(type)) this.listeners.set(type, new Set());
     this.listeners.get(type).add(callback);

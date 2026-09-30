@@ -20,6 +20,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-live2d"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "aether-player"
 version = "0.1.0"
 dependencies = [
@@ -44,6 +53,7 @@ name = "aether-rig"
 version = "0.1.0"
 dependencies = [
  "aether-core",
+ "aether-live2d",
  "aether-raster",
  "serde",
  "serde_json",

@@ -562,6 +562,28 @@ impl Animator {
         self.layers.is_empty()
     }
 
+    /// True while motion `index` plays and is not fading out.
+    pub fn is_playing(&self, index: usize) -> bool {
+        self.layers
+            .iter()
+            .any(|l| l.motion == index && l.fade_out.is_none())
+    }
+
+    /// True while any motion plays and is not fading out.
+    pub fn has_active(&self) -> bool {
+        self.layers.iter().any(|l| l.fade_out.is_none())
+    }
+
+    /// Fade out motion `index` wherever it plays.
+    pub fn stop(&mut self, motions: &[Motion], index: usize) {
+        for layer in &mut self.layers {
+            if layer.motion == index && layer.fade_out.is_none() {
+                let out = motions.get(index).map(|m| m.fade_out).unwrap_or(0.3);
+                layer.fade_out = Some(out.max(1e-3));
+            }
+        }
+    }
+
     /// Advance and apply every layer to `values`.
     pub fn update(
         &mut self,

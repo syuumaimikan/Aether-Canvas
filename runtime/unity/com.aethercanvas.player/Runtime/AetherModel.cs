@@ -62,8 +62,15 @@ namespace AetherCanvas
         [Tooltip("Loudness gain for lip sync.")]
         public float lipSyncGain = 1f;
 
+        [Tooltip("Play motions and switch expressions with the keys set up in the editor's Hotkeys panel " +
+                 "(Unity's Input Manager; with the Input System package, call Player.PressKey yourself).")]
+        public bool hotkeys = true;
+
         /// <summary>A motion passed one of its timeline events.</summary>
         public event Action<MotionEvent> MotionEventReached;
+
+        /// <summary>A hotkey fired.</summary>
+        public event Action<Hotkey> HotkeyPressed;
 
         /// <summary>The player, once a model is loaded. Drive it directly for anything not wrapped here.</summary>
         public Player Player { get; private set; }
@@ -99,6 +106,7 @@ namespace AetherCanvas
                 var (level, brightness) = LipSync.Measure(samples, samples.Length, AudioSettings.outputSampleRate, lipSyncGain);
                 Player.SetAudio(level, brightness);
             }
+            if (hotkeys && Application.isPlaying) PollHotkeys();
             if (playing && Application.isPlaying)
             {
                 Player.Tick(Time.deltaTime * speed);
@@ -314,6 +322,74 @@ namespace AetherCanvas
             Player.LookAt(Mathf.Clamp((m.x - half) / half, -1, 1), Mathf.Clamp(-(m.y - Player.Height / 3f) / half, -1, 1));
         }
 
+        // ------------------------------------------------------------ hotkeys
+
+        /// <summary>Press a key: trigger the model's hotkey for it (see <see cref="Player.PressKey"/>).</summary>
+        public bool PressKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
+        {
+            if (Player == null) return false;
+            var index = Player.PressKey(key, ctrl, shift, alt);
+            if (index < 0) return false;
+            HotkeyPressed?.Invoke(Player.Hotkeys[index]);
+            return true;
+        }
+
+        void PollHotkeys()
+        {
+#if !ENABLE_INPUT_SYSTEM || ENABLE_LEGACY_INPUT_MANAGER
+            if (!Input.anyKeyDown || Player.Hotkeys.Count == 0) return;
+            var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl) ||
+                       Input.GetKey(KeyCode.LeftCommand) || Input.GetKey(KeyCode.RightCommand);
+            var shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            var alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            var tried = new HashSet<string>();
+            foreach (var hotkey in Player.Hotkeys)
+            {
+                var key = hotkey.Key;
+                if (!tried.Add(key)) continue;
+                foreach (var code in KeyCodes(key))
+                {
+                    if (Input.GetKeyDown(code) && PressKey(key, ctrl, shift, alt)) return;
+                }
+            }
+#endif
+        }
+
+        /// <summary>Unity's key codes for a hotkey's key name.</summary>
+        public static IEnumerable<KeyCode> KeyCodes(string key)
+        {
+            if (string.IsNullOrEmpty(key)) yield break;
+            if (key.Length == 1 && key[0] >= '0' && key[0] <= '9')
+            {
+                yield return KeyCode.Alpha0 + (key[0] - '0');
+                yield return KeyCode.Keypad0 + (key[0] - '0');
+                yield break;
+            }
+            switch (key)
+            {
+                case "Enter": yield return KeyCode.Return; yield return KeyCode.KeypadEnter; yield break;
+                case "ArrowUp": yield return KeyCode.UpArrow; yield break;
+                case "ArrowDown": yield return KeyCode.DownArrow; yield break;
+                case "ArrowLeft": yield return KeyCode.LeftArrow; yield break;
+                case "ArrowRight": yield return KeyCode.RightArrow; yield break;
+                case "-": yield return KeyCode.Minus; yield return KeyCode.KeypadMinus; yield break;
+                case "+": yield return KeyCode.Plus; yield return KeyCode.KeypadPlus; yield break;
+                case "=": yield return KeyCode.Equals; yield break;
+                case "[": yield return KeyCode.LeftBracket; yield break;
+                case "]": yield return KeyCode.RightBracket; yield break;
+                case ";": yield return KeyCode.Semicolon; yield break;
+                case "'": yield return KeyCode.Quote; yield break;
+                case ",": yield return KeyCode.Comma; yield break;
+                case ".": yield return KeyCode.Period; yield break;
+                case "/": yield return KeyCode.Slash; yield break;
+                case "\\": yield return KeyCode.Backslash; yield break;
+                case "`": yield return KeyCode.BackQuote; yield break;
+            }
+            // Letters, F1–F15, Space, Tab, Backspace, Escape, Insert, Delete,
+            // Home, End, PageUp, PageDown share Unity's names.
+            if (Enum.TryParse(key, out KeyCode code)) yield return code;
+        }
+
         // ------------------------------------------------------- conveniences
 
         /// <summary>Set a parameter's base value. False for an unknown name.</summary>
@@ -327,6 +403,9 @@ namespace AetherCanvas
 
         /// <summary>Fade to an expression; null or "" for none.</summary>
         public bool SetExpression(string name) => Player != null && Player.SetExpression(name);
+
+        /// <summary>Switch an expression on or off, leaving the others. False for an unknown name.</summary>
+        public bool ToggleExpression(string name) => Player != null && Player.ToggleExpression(name);
 
         /// <summary>Feed a face-tracker sample (see <see cref="Player.TrackFace(float, float, float, IEnumerable{KeyValuePair{string, float}})"/>).</summary>
         public void TrackFace(float yaw, float pitch, float roll, IEnumerable<KeyValuePair<string, float>> shapes) =>

@@ -24,6 +24,8 @@
 //!   crossfades, and expression presets.
 //! * [`behaviour`] / [`audio`] — auto-blink, breathing, look-at and lip sync
 //!   (live, or baked from a WAV file).
+//! * [`hotkey`] — keys that play motions and switch expressions while a
+//!   model performs.
 //! * [`automesh`] / [`generate`] — automatic meshing, 3D head-turn
 //!   generation, keyform mirroring and standard physics setup.
 //! * [`autorig`] — a complete rig from layer names in one call.
@@ -45,6 +47,7 @@ pub mod expr;
 pub mod flat;
 pub mod generate;
 pub mod geom;
+pub mod hotkey;
 pub mod keyform;
 pub mod mesh;
 pub mod motion;
@@ -59,6 +62,7 @@ pub use behaviour::Behaviours;
 pub use cubism::{CubismPose, CubismRig};
 pub use deformer::{Deformer, DeformerKind, RotationDeformer, RotationForm, WarpDeformer, WarpForm};
 pub use driver::Driver;
+pub use hotkey::{Hotkey, HotkeyAction, KeyChord};
 pub use keyform::{BlendShape, KeyAxis, KeyInterpolation, KeyformGrid};
 pub use mesh::{ArtMesh, Jiggle, MeshForm, Skin};
 pub use motion::{Easing, Expression, Keyframe, Motion, Track};

@@ -21,6 +21,7 @@
 
 use crate::behaviour::{BehaviourInputs, BehaviourState};
 use crate::driver::{self, DriverIssue};
+use crate::hotkey::{self, HotkeyAction, KeyChord};
 use crate::motion::{Animator, MotionBlend};
 use crate::param::ParamValues;
 use crate::physics::PhysicsRuntime;
@@ -79,6 +80,9 @@ pub struct RigRuntime {
     pub scrub: Option<(usize, f32)>,
     /// Problems reported by drivers on the last tick.
     pub issues: Vec<DriverIssue>,
+    /// A looping motion that plays whenever no other motion does: a motion
+    /// that plays once hands back to it when it ends. Hotkeys set it.
+    pub idle: Option<usize>,
     behaviours: BehaviourState,
     physics: PhysicsRuntime,
     jiggle: BTreeMap<LayerId, JiggleState>,
@@ -118,6 +122,7 @@ impl RigRuntime {
     pub fn stop(&mut self, rig: &mut Rig) {
         self.animator = Animator::default();
         self.scrub = None;
+        self.idle = None;
         self.reset();
         rig.dynamics = Default::default();
     }
@@ -136,6 +141,68 @@ impl RigRuntime {
         if let Some(i) = index {
             self.expressions.entry(i).or_insert((0.0, 1.0)).1 = 1.0;
         }
+    }
+
+    /// Switch expression `index` on or off, leaving the others as they are.
+    pub fn toggle_expression(&mut self, index: usize) {
+        let weight = self.expressions.entry(index).or_insert((0.0, 0.0));
+        weight.1 = if weight.1 > 0.5 { 0.0 } else { 1.0 };
+    }
+
+    /// The expressions switched on (fading in or shown), in index order.
+    pub fn active_expressions(&self) -> Vec<usize> {
+        self.expressions
+            .iter()
+            .filter(|(_, (_, target))| *target > 0.5)
+            .map(|(i, _)| *i)
+            .collect()
+    }
+
+    /// Carry out a hotkey's action (see [`HotkeyAction`]). Returns false,
+    /// doing nothing, when the motion or expression it names does not exist.
+    pub fn trigger(&mut self, rig: &Rig, action: &HotkeyAction) -> bool {
+        match action {
+            HotkeyAction::PlayMotion(name) => {
+                let Some(index) = rig.motions.iter().position(|m| &m.name == name) else {
+                    return false;
+                };
+                self.scrub = None;
+                if rig.motions[index].looping {
+                    if self.idle == Some(index) && self.animator.is_playing(index) {
+                        self.idle = None;
+                        self.animator.stop(&rig.motions, index);
+                        return true;
+                    }
+                    self.idle = Some(index);
+                }
+                self.animator.play(&rig.motions, index, MotionBlend::Override);
+            }
+            HotkeyAction::ToggleExpression(name) => {
+                let Some(index) = rig.expressions.iter().position(|e| &e.name == name) else {
+                    return false;
+                };
+                self.toggle_expression(index);
+            }
+            HotkeyAction::ClearExpressions => self.set_expression(None),
+            HotkeyAction::StopMotions => {
+                self.idle = None;
+                self.animator.stop_all(&rig.motions);
+            }
+            HotkeyAction::Reset => {
+                self.idle = None;
+                self.animator.stop_all(&rig.motions);
+                self.set_expression(None);
+            }
+        }
+        true
+    }
+
+    /// Press `keys`: trigger the rig's hotkey bound to them. Returns its
+    /// index when one fired.
+    pub fn press(&mut self, rig: &Rig, keys: &KeyChord) -> Option<usize> {
+        let index = hotkey::find(&rig.hotkeys, keys)?;
+        let action = rig.hotkeys[index].action.clone();
+        self.trigger(rig, &action).then_some(index)
     }
 
     /// The expression currently fading in, if any.
@@ -159,9 +226,17 @@ impl RigRuntime {
                         m.apply(&rig.parameters, time, 1.0, false, &mut values);
                     }
                 }
-                None => self
-                    .animator
-                    .update(&rig.motions, &rig.parameters, &mut values, dt),
+                None => {
+                    if let Some(idle) = self.idle {
+                        if idle >= rig.motions.len() {
+                            self.idle = None;
+                        } else if !self.animator.has_active() {
+                            self.animator.play(&rig.motions, idle, MotionBlend::Override);
+                        }
+                    }
+                    self.animator
+                        .update(&rig.motions, &rig.parameters, &mut values, dt)
+                }
             }
         }
 
@@ -338,6 +413,119 @@ mod tests {
         assert_eq!(rig.value(ParameterId(1)), 0.0, "authored values are untouched");
         runtime.stop(&mut rig);
         assert!(rig.dynamics.values.is_none());
+    }
+
+    /// A rig with a looping sway (AngleX ±30), a one-shot nod (BodyAngleX
+    /// to 10) and two expressions, bound to keys.
+    fn performer() -> Rig {
+        use crate::hotkey::{Hotkey, HotkeyAction, KeyChord};
+        use crate::motion::{Expression, ExpressionBlend, ExpressionEntry};
+        let mut rig = rig();
+        let mut sway = Motion::new("Sway", 2.0, 30.0);
+        sway.looping = true;
+        sway.fade_in = 0.0;
+        for (t, v) in [(0.0, 30.0), (2.0, 30.0)] {
+            sway.track_mut(ParameterId(1)).set_key(t, v);
+        }
+        let mut nod = Motion::new("Nod", 0.5, 30.0);
+        nod.looping = false;
+        nod.fade_in = 0.0;
+        nod.fade_out = 0.1;
+        for (t, v) in [(0.0, 10.0), (0.5, 10.0)] {
+            nod.track_mut(ParameterId(2)).set_key(t, v);
+        }
+        rig.motions = vec![sway, nod];
+        for (name, param, value) in [("Left", 1, -20.0), ("Lean", 2, -5.0)] {
+            rig.expressions.push(Expression {
+                name: name.into(),
+                entries: vec![ExpressionEntry {
+                    param: ParameterId(param),
+                    value,
+                    blend: ExpressionBlend::Add,
+                }],
+                fade: 0.0,
+            });
+        }
+        let key = |k: &str| KeyChord::parse(k).expect("key");
+        rig.hotkeys = vec![
+            Hotkey::new(key("1"), HotkeyAction::PlayMotion("Sway".into())),
+            Hotkey::new(key("2"), HotkeyAction::PlayMotion("Nod".into())),
+            Hotkey::new(key("Shift+1"), HotkeyAction::ToggleExpression("Left".into())),
+            Hotkey::new(key("Shift+2"), HotkeyAction::ToggleExpression("Lean".into())),
+            Hotkey::new(key("0"), HotkeyAction::Reset),
+            Hotkey::new(key("9"), HotkeyAction::PlayMotion("Missing".into())),
+        ];
+        rig
+    }
+
+    #[test]
+    fn hotkeys_play_motions_over_an_idle_loop() {
+        use crate::hotkey::KeyChord;
+        let mut rig = performer();
+        let mut runtime = RigRuntime::new();
+        let press =
+            |runtime: &mut RigRuntime, rig: &Rig, k: &str| runtime.press(rig, &KeyChord::parse(k).unwrap());
+        let run = |runtime: &mut RigRuntime, rig: &mut Rig, seconds: f32| {
+            for _ in 0..(seconds * 60.0) as usize {
+                runtime.tick(rig, 1.0 / 60.0);
+            }
+        };
+
+        // 1 starts the looping sway: it becomes the idle loop.
+        assert_eq!(press(&mut runtime, &rig, "1"), Some(0));
+        run(&mut runtime, &mut rig, 0.2);
+        assert!((rig.effective_value(ParameterId(1)) - 30.0).abs() < 1e-3);
+
+        // 2 plays the nod over it, and the sway comes back when it ends.
+        assert_eq!(press(&mut runtime, &rig, "2"), Some(1));
+        run(&mut runtime, &mut rig, 0.3);
+        assert!(rig.effective_value(ParameterId(2)) > 9.0, "the nod plays");
+        run(&mut runtime, &mut rig, 1.5);
+        assert!(
+            rig.effective_value(ParameterId(2)).abs() < 1e-3,
+            "the nod is over"
+        );
+        assert!(
+            (rig.effective_value(ParameterId(1)) - 30.0).abs() < 1e-3,
+            "and the sway is back: {}",
+            rig.effective_value(ParameterId(1))
+        );
+
+        // Pressing 1 again stops the loop.
+        press(&mut runtime, &rig, "1");
+        run(&mut runtime, &mut rig, 1.0);
+        assert!(rig.effective_value(ParameterId(1)).abs() < 1e-3);
+        assert!(runtime.animator.is_idle());
+
+        // Unbound keys and missing motions do nothing.
+        assert_eq!(press(&mut runtime, &rig, "5"), None);
+        assert_eq!(press(&mut runtime, &rig, "9"), None);
+    }
+
+    #[test]
+    fn expression_hotkeys_toggle_and_stack() {
+        use crate::hotkey::KeyChord;
+        let mut rig = performer();
+        let mut runtime = RigRuntime::new();
+        let press =
+            |runtime: &mut RigRuntime, rig: &Rig, k: &str| runtime.press(rig, &KeyChord::parse(k).unwrap());
+        press(&mut runtime, &rig, "Shift+1");
+        press(&mut runtime, &rig, "Shift+2");
+        runtime.tick(&mut rig, 1.0 / 60.0);
+        assert_eq!(runtime.active_expressions(), vec![0, 1], "both are on");
+        assert!((rig.effective_value(ParameterId(1)) + 20.0).abs() < 1e-3);
+        assert!((rig.effective_value(ParameterId(2)) + 5.0).abs() < 1e-3);
+        press(&mut runtime, &rig, "Shift+1");
+        runtime.tick(&mut rig, 1.0 / 60.0);
+        assert_eq!(runtime.active_expressions(), vec![1], "the first is off again");
+        assert!(rig.effective_value(ParameterId(1)).abs() < 1e-3);
+        press(&mut runtime, &rig, "1");
+        press(&mut runtime, &rig, "0");
+        for _ in 0..60 {
+            runtime.tick(&mut rig, 1.0 / 60.0);
+        }
+        assert!(runtime.active_expressions().is_empty(), "0 resets");
+        assert!(runtime.animator.is_idle() && runtime.idle.is_none());
     }
 
     #[test]

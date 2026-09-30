@@ -90,6 +90,34 @@ test('draw lists, hit testing and expressions work through the module', () => {
   model.dispose();
 });
 
+test('hotkeys play motions and switch expressions', () => {
+  const model = runtime.createModel(json);
+  assert.deepEqual(
+    model.hotkeys.map((k) => `${k.keys} ${k.name}`),
+    ['1 Greeting', 'Shift+1 Smile', 'Shift+2 Surprised', '0 Reset'],
+  );
+  // KeyboardEvent codes work as well as printed names; Shift must match.
+  assert.equal(model.pressKey('Digit1', { shift: true })?.name, 'Smile');
+  model.tick(1);
+  assert.ok(model.expressionActive('Smile'));
+  assert.equal(model.parameter('MouthForm'), 1);
+  assert.equal(model.pressKey('Digit2', { shift: true })?.name, 'Surprised');
+  model.tick(1);
+  assert.ok(model.expressionActive('Smile') && model.expressionActive('Surprised'), 'expressions stack');
+  model.toggleExpression('Smile');
+  model.tick(1);
+  assert.ok(!model.expressionActive('Smile'));
+
+  assert.equal(model.pressKey('1')?.name, 'Greeting');
+  assert.ok(model.playing);
+  assert.equal(model.pressKey('9'), null);
+  assert.equal(model.pressKey(''), null);
+  assert.ok(model.triggerHotkey('0'), 'by keys');
+  for (let i = 0; i < 120; i++) model.tick(1 / 60);
+  assert.ok(!model.playing && !model.expressionActive('Surprised'), '0 resets');
+  model.dispose();
+});
+
 test('look-at and lip sync inputs drive their parameters', () => {
   const model = runtime.createModel(json);
   model.lookAt(1, 0);

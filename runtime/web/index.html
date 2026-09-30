@@ -76,6 +76,10 @@
     <h2>Expressions</h2>
     <div class="buttons" id="expressions"></div>
 
+    <h2>Hotkeys</h2>
+    <div class="buttons" id="hotkeys"></div>
+    <p class="lead" style="margin-top:6px">Press the keys on your keyboard, as in VTube Studio. Set them up in the editor's Hotkeys panel.</p>
+
     <h2>Face tracking</h2>
     <div class="buttons">
       <button id="track">Track my face (webcam)</button>
@@ -205,17 +209,26 @@
     );
     if (!player.motions.length) motions.textContent = 'None';
 
+    // Expressions switch on and off and can stack, as hotkeys switch them.
     const expressions = document.getElementById('expressions');
-    const expressionButtons = player.expressions.map((name) =>
-      button(name, (e) => {
-        const on = !e.target.classList.contains('on');
-        expressionButtons.forEach((b) => b.classList.remove('on'));
-        e.target.classList.toggle('on', on);
-        player.setExpression(on ? name : null);
-      }),
-    );
+    const expressionButtons = player.expressions.map((name) => button(name, () => player.toggleExpression(name)));
     expressions.replaceChildren(...expressionButtons);
     if (!expressionButtons.length) expressions.textContent = 'None';
+    player.on('frame', () =>
+      expressionButtons.forEach((b, i) => b.classList.toggle('on', player.expressionActive(i))),
+    );
+
+    const hotkeys = document.getElementById('hotkeys');
+    hotkeys.replaceChildren(
+      ...player.hotkeys.map((k) => {
+        const b = button(`${k.keys}  ${k.name}`, () => player.triggerHotkey(k.index));
+        b.title = `Press ${k.keys}`;
+        return b;
+      }),
+    );
+    if (!player.hotkeys.length) hotkeys.textContent = 'None';
+    player.listenForHotkeys();
+    player.on('hotkey', ({ keys, name }) => (status.textContent = `${keys}: ${name}`));
 
     const list = document.getElementById('parameters');
     const rows = player.parameters.map((p) => {

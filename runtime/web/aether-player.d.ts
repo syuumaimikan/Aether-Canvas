@@ -47,6 +47,21 @@ export interface MotionEvent {
 
 export type Stage = 'motions' | 'behaviours' | 'drivers' | 'physics' | 'jiggle';
 
+/** A key that plays a motion or switches an expression, set up in the editor. */
+export interface HotkeyInfo {
+  index: number;
+  /** Its name, or the motion or expression it plays. */
+  name: string;
+  /** The keys, written like "Shift+1". */
+  keys: string;
+}
+
+export interface KeyModifiers {
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+}
+
 /**
  * One face-tracker sample. Angles are degrees in the tracked person's frame:
  * yaw toward their left, pitch up, roll toward their left shoulder.
@@ -91,6 +106,7 @@ export class AetherModel {
   readonly parameters: ParameterInfo[];
   readonly motions: MotionInfo[];
   readonly expressions: string[];
+  readonly hotkeys: HotkeyInfo[];
   readonly parts: PartInfo[];
   readonly playing: boolean;
 
@@ -104,6 +120,13 @@ export class AetherModel {
   stopMotions(): void;
   /** Fade to an expression, or out of all of them with null. */
   setExpression(nameOrIndex: string | number | null): void;
+  /** Switch an expression on or off, leaving the others. */
+  toggleExpression(nameOrIndex: string | number): void;
+  expressionActive(nameOrIndex: string | number): boolean;
+  /** Carry out a hotkey (by index, name or keys) as if its key were pressed. */
+  triggerHotkey(which: number | string): boolean;
+  /** A key was pressed ("1", "F5", or a KeyboardEvent code like "Digit1"); returns the hotkey that fired. */
+  pressKey(key: string, modifiers?: KeyModifiers): HotkeyInfo | null;
   /** Look towards (x, y) in -1..1, y up; null looks ahead. */
   lookAt(x: number | null, y?: number): void;
   /** Voice loudness 0..1 and brightness -1..1, for lip sync. */
@@ -161,16 +184,22 @@ export class AetherPlayer {
   readonly parameters: ParameterInfo[];
   readonly motions: MotionInfo[];
   readonly expressions: string[];
+  readonly hotkeys: HotkeyInfo[];
 
   setParameter(nameOrIndex: string | number, value: number): void;
   parameter(nameOrIndex: string | number): number;
   playMotion(nameOrIndex: string | number, options?: { additive?: boolean }): boolean;
   stopMotions(): void;
   setExpression(nameOrIndex: string | number | null): void;
+  toggleExpression(nameOrIndex: string | number): void;
+  expressionActive(nameOrIndex: string | number): boolean;
+  triggerHotkey(which: number | string): boolean;
+  pressKey(key: string, modifiers?: KeyModifiers): HotkeyInfo | null;
   lookAt(x: number | null, y?: number): void;
   setStage(stage: Stage | number, enabled: boolean): void;
   reset(): void;
 
+  on(type: 'hotkey', callback: (hotkey: HotkeyInfo) => void): () => void;
   on(type: 'event', callback: (event: MotionEvent) => void): () => void;
   on(type: 'hit', callback: (hit: { part: string; index: number; x: number; y: number }) => void): () => void;
   on(type: 'frame', callback: (dt: number) => void): () => void;
@@ -184,6 +213,8 @@ export class AetherPlayer {
   documentPoint(event: { clientX: number; clientY: number }): [number, number];
   /** Look at the pointer. Returns a function that stops. */
   followPointer(options?: { element?: EventTarget; center?: [number, number]; reach?: number }): () => void;
+  /** Play motions and switch expressions with the model's hotkeys. Returns a function that stops. */
+  listenForHotkeys(options?: { element?: EventTarget }): () => void;
   /** Emit 'hit' for taps on parts. Returns a function that stops. */
   enableHitTest(): () => void;
   /** Record the canvas as video (WebM where supported); `stop()` resolves to the file. */

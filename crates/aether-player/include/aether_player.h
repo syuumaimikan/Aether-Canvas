@@ -113,6 +113,20 @@ uint32_t aether_player_is_playing(const AetherPlayer *p);
 uint32_t aether_player_expression_count(const AetherPlayer *p);
 const uint8_t *aether_player_expression_name(const AetherPlayer *p, uint32_t index, size_t *len);
 void aether_player_set_expression(AetherPlayer *p, int32_t index); /* < 0: none */
+void aether_player_toggle_expression(AetherPlayer *p, uint32_t index); /* several can show */
+uint32_t aether_player_expression_active(const AetherPlayer *p, uint32_t index);
+
+/* Hotkeys: keys that play motions and switch expressions. Keys are named as
+ * printed ("1", "A", "F5", "Space"; "Digit1", "KeyA", "Num1" work too). */
+#define AETHER_MODIFIER_CTRL 1u
+#define AETHER_MODIFIER_SHIFT 2u
+#define AETHER_MODIFIER_ALT 4u
+uint32_t aether_player_hotkey_count(const AetherPlayer *p);
+const uint8_t *aether_player_hotkey_name(const AetherPlayer *p, uint32_t index, size_t *len);
+const uint8_t *aether_player_hotkey_keys(const AetherPlayer *p, uint32_t index, size_t *len); /* "Shift+1" */
+uint32_t aether_player_trigger_hotkey(AetherPlayer *p, uint32_t index);
+/* Returns the index of the hotkey that fired, or -1. */
+int32_t aether_player_press_key(AetherPlayer *p, const uint8_t *key, size_t len, uint32_t modifiers);
 void aether_player_look_at(AetherPlayer *p, float x, float y);   /* -1..1, y up */
 void aether_player_look_ahead(AetherPlayer *p);
 void aether_player_set_audio(AetherPlayer *p, float level, float brightness);

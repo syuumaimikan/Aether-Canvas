@@ -12,8 +12,8 @@ use aether_player::tracking::FaceFrame;
 use aether_player::{BlendKind, Player};
 use godot::classes::rendering_server::{CanvasGroupMode, CanvasItemTextureFilter};
 use godot::classes::{
-    FileAccess, INode2D, Image, ImageTexture, Node2D, RenderingServer, ResourceLoader, Shader,
-    ShaderMaterial, Texture2D,
+    FileAccess, INode2D, Image, ImageTexture, InputEvent, InputEventKey, Node2D, Os, RenderingServer,
+    ResourceLoader, Shader, ShaderMaterial, Texture2D,
 };
 use godot::prelude::*;
 
@@ -121,6 +121,10 @@ pub struct AetherModel2D {
     /// Advance time every frame.
     #[export]
     playing: bool,
+    /// Play motions and switch expressions with the keys set up in the
+    /// editor's Hotkeys panel (keys no other node handled).
+    #[export]
+    hotkeys_enabled: bool,
     player: Option<Player>,
     textures: Vec<Gd<ImageTexture>>,
     shaders: Vec<(Pass, Gd<Shader>)>,
@@ -138,6 +142,7 @@ impl INode2D for AetherModel2D {
             autoplay: GString::new(),
             speed: 1.0,
             playing: true,
+            hotkeys_enabled: true,
             player: None,
             textures: Vec::new(),
             shaders: Vec::new(),
@@ -191,8 +196,48 @@ impl INode2D for AetherModel2D {
         }
     }
 
+    fn unhandled_key_input(&mut self, event: Gd<InputEvent>) {
+        if !self.hotkeys_enabled || self.player.is_none() {
+            return;
+        }
+        let Ok(key) = event.try_cast::<InputEventKey>() else {
+            return;
+        };
+        if !key.is_pressed() || key.is_echo() {
+            return;
+        }
+        let name = Os::singleton().get_keycode_string(key.get_keycode()).to_string();
+        let ctrl = key.is_ctrl_pressed() || key.is_meta_pressed();
+        if self.press_key_named(&name, ctrl, key.is_shift_pressed(), key.is_alt_pressed()) {
+            if let Some(mut viewport) = self.base().get_viewport() {
+                viewport.set_input_as_handled();
+            }
+        }
+    }
+
     fn exit_tree(&mut self) {
         self.release();
+    }
+}
+
+impl AetherModel2D {
+    fn press_key_named(&mut self, key: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        let Some(player) = &mut self.player else {
+            return false;
+        };
+        let Some(index) = player.press_key(key, ctrl, shift, alt) else {
+            return false;
+        };
+        let hotkey = &player.hotkeys()[index];
+        let (name, keys) = (hotkey.label(), hotkey.keys.to_string());
+        self.base_mut().emit_signal(
+            "hotkey_pressed",
+            &[
+                GString::from(name.as_str()).to_variant(),
+                GString::from(keys.as_str()).to_variant(),
+            ],
+        );
+        true
     }
 }
 
@@ -205,6 +250,10 @@ impl AetherModel2D {
     /// The model finished loading.
     #[signal]
     fn model_loaded();
+
+    /// A hotkey fired: its name and its keys ("Shift+1").
+    #[signal]
+    fn hotkey_pressed(name: GString, keys: GString);
 
     /// Load a model from `model.json` (a `res://` or file path). Returns
     /// false, with the reason printed, when it cannot.
@@ -371,6 +420,60 @@ impl AetherModel2D {
             let index = player.expression_index(&name.to_string());
             player.set_expression(index);
         }
+    }
+
+    /// Switch an expression on or off by name, leaving the others.
+    #[func]
+    pub fn toggle_expression(&mut self, name: GString) -> bool {
+        let Some(player) = &mut self.player else {
+            return false;
+        };
+        match player.expression_index(&name.to_string()) {
+            Some(i) => {
+                player.toggle_expression(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// True while an expression is switched on.
+    #[func]
+    pub fn is_expression_active(&self, name: GString) -> bool {
+        self.player.as_ref().is_some_and(|p| {
+            p.expression_index(&name.to_string())
+                .is_some_and(|i| p.active_expressions().contains(&i))
+        })
+    }
+
+    /// The hotkeys, as "keys: name" ("Shift+1: Smile").
+    #[func]
+    pub fn get_hotkeys(&self) -> PackedStringArray {
+        self.player
+            .as_ref()
+            .map(|p| {
+                p.hotkeys()
+                    .iter()
+                    .map(|h| GString::from(format!("{}: {}", h.keys, h.label()).as_str()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Carry out hotkey `index` as if its key were pressed.
+    #[func]
+    pub fn trigger_hotkey(&mut self, index: i64) -> bool {
+        match (&mut self.player, usize::try_from(index)) {
+            (Some(player), Ok(i)) => player.trigger_hotkey(i),
+            _ => false,
+        }
+    }
+
+    /// Press a key by name ("1", "A", "F5", "Space"): trigger the hotkey
+    /// bound to it. For input the node does not see itself.
+    #[func]
+    pub fn press_key(&mut self, key: GString, ctrl: bool, shift: bool, alt: bool) -> bool {
+        self.press_key_named(&key.to_string(), ctrl, shift, alt)
     }
 
     /// Look toward `target` (-1..1 on each axis, y up), or ahead for (0, 0)

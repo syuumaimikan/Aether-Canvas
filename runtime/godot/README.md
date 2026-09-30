@@ -59,6 +59,10 @@ func _unhandled_input(event: InputEvent) -> void:
 | `get_parameter_names()`, `set_parameter(name, value)`, `get_parameter(name)` | Base values; motions, physics and behaviours layer on top. Unknown names read as `NAN` |
 | `get_motion_names()`, `play_motion(name, additive) -> bool`, `stop_motions()`, `is_motion_playing()` | |
 | `set_expression(name)` | Fade to an expression; `""` fades out of all of them |
+| `toggle_expression(name) -> bool`, `is_expression_active(name)` | Switch an expression on or off, leaving the others (they stack) |
+| `hotkeys_enabled` | Exported property (on by default): keys set up in the editor's Hotkeys panel play motions and switch expressions, from key presses no other node handled |
+| `get_hotkeys()`, `press_key(key, ctrl, shift, alt) -> bool`, `trigger_hotkey(index) -> bool` | The hotkeys (`"Shift+1: Smile"`), and pressing one by hand (keys named as printed: `"1"`, `"A"`, `"F5"`) |
+| `hotkey_pressed(name, keys)` | Signal: a hotkey fired |
 | `look_toward(Vector2)`, `look_ahead()` | Head and eyes follow a point (-1..1, y up) |
 | `set_audio(level, brightness)` | Lip sync from a loudness (0..1) and brightness (-1..1), for example from an `AudioEffectSpectrumAnalyzer` |
 | `track_face(yaw, pitch, roll, shapes)`, `calibrate_tracking()`, `stop_tracking()` | Drive the face from a tracker: head angles in degrees and a `Dictionary` of ARKit/MediaPipe blend shapes (`{"jawOpen": 0.4, "eyeBlinkLeft": 1.0}`). Mirrored like a webcam by default |

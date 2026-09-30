@@ -60,7 +60,19 @@ int main(int argc, char **argv) {
         printf("%s set to %.1f, drawn at %.1f\n", name, range[1],
                aether_player_parameter_value(p, (uint32_t)angle));
     }
-    if (aether_player_motion_count(p) > 0) aether_player_play_motion(p, 0, 0);
+    /* Hotkeys: list them, then press "1" as a keyboard handler would. */
+    for (uint32_t h = 0; h < aether_player_hotkey_count(p); h++) {
+        size_t nk = 0, nn = 0;
+        const uint8_t *keys = aether_player_hotkey_keys(p, h, &nk);
+        const uint8_t *label = aether_player_hotkey_name(p, h, &nn);
+        printf("hotkey %.*s: %.*s\n", (int)nk, (const char *)keys, (int)nn, (const char *)label);
+    }
+    int32_t fired = aether_player_press_key(p, (const uint8_t *)"1", 1, 0);
+    if (fired >= 0) {
+        printf("pressed 1: hotkey %d\n", fired);
+    } else if (aether_player_motion_count(p) > 0) {
+        aether_player_play_motion(p, 0, 0);
+    }
     for (int frame = 0; frame < 60; frame++) {
         aether_player_tick(p, 1.0f / 60.0f);
         for (uint32_t e = 0; e < aether_player_event_count(p); e++) {

@@ -5,7 +5,7 @@ use crate::tracking::{face_targets, FaceFrame, Tracking, TrackingSettings};
 use aether_core::math::{Rect, Vec2};
 use aether_rig::motion::MotionBlend;
 use aether_rig::runtime::RuntimeSettings;
-use aether_rig::{Parameter, RigRuntime};
+use aether_rig::{Hotkey, KeyChord, Parameter, RigRuntime};
 
 /// One draw call, in back-to-front order.
 ///
@@ -225,6 +225,49 @@ impl Player {
     pub fn set_expression(&mut self, index: Option<usize>) {
         let index = index.filter(|&i| i < self.model.rig.expressions.len());
         self.runtime.set_expression(index);
+    }
+
+    /// Switch an expression on or off, leaving the others: several can show
+    /// at once, as hotkeys do.
+    pub fn toggle_expression(&mut self, index: usize) {
+        if index < self.model.rig.expressions.len() {
+            self.runtime.toggle_expression(index);
+        }
+    }
+
+    /// The expressions switched on, in index order.
+    pub fn active_expressions(&self) -> Vec<usize> {
+        self.runtime.active_expressions()
+    }
+
+    // ---- hotkeys ----------------------------------------------------------
+
+    /// The model's hotkeys: keys that play motions and switch expressions.
+    pub fn hotkeys(&self) -> &[Hotkey] {
+        &self.model.rig.hotkeys
+    }
+
+    /// Carry out hotkey `index`, as if its key were pressed. Returns false
+    /// for a bad index or a hotkey whose motion or expression is missing.
+    pub fn trigger_hotkey(&mut self, index: usize) -> bool {
+        let Some(action) = self.model.rig.hotkeys.get(index).map(|h| h.action.clone()) else {
+            return false;
+        };
+        self.runtime.trigger(&self.model.rig, &action)
+    }
+
+    /// A key was pressed: trigger the hotkey bound to it. `key` is the key's
+    /// name in any common spelling (`1`, `Digit1`, `a`, `F5`, `Space`; see
+    /// [`KeyChord::normalise_key`]). Returns the hotkey's index when one
+    /// fired.
+    pub fn press_key(&mut self, key: &str, ctrl: bool, shift: bool, alt: bool) -> Option<usize> {
+        let chord = KeyChord {
+            ctrl,
+            shift,
+            alt,
+            ..KeyChord::key(key)?
+        };
+        self.runtime.press(&self.model.rig, &chord)
     }
 
     // ---- inputs -----------------------------------------------------------
@@ -647,6 +690,45 @@ mod tests {
             player.tick(1.0 / 60.0);
         }
         assert!(!player.is_playing());
+    }
+
+    #[test]
+    fn hotkeys_play_motions_and_switch_expressions() {
+        use aether_rig::motion::{ExpressionBlend, ExpressionEntry};
+        use aether_rig::{Expression, Hotkey, HotkeyAction};
+        let mut model = model();
+        let slide = model.rig.parameter_named("Slide").unwrap().id;
+        model.rig.expressions.push(Expression {
+            name: "Out".into(),
+            entries: vec![ExpressionEntry {
+                param: slide,
+                value: 1.0,
+                blend: ExpressionBlend::Overwrite,
+            }],
+            fade: 0.0,
+        });
+        let key = |k: &str| KeyChord::parse(k).unwrap();
+        model.rig.hotkeys = vec![
+            Hotkey::new(key("1"), HotkeyAction::PlayMotion("wave".into())),
+            Hotkey::new(key("Shift+1"), HotkeyAction::ToggleExpression("Out".into())),
+        ];
+        let mut player = Player::new(model).unwrap();
+        assert_eq!(player.hotkeys().len(), 2);
+
+        // Browsers call the 1 key "Digit1"; Shift must match.
+        assert_eq!(player.press_key("Digit1", false, true, false), Some(1));
+        player.tick(1.0 / 60.0);
+        assert_eq!(player.active_expressions(), vec![0]);
+        assert_eq!(player.parameter_value(0), 1.0);
+        assert!(player.trigger_hotkey(1), "and off again");
+        player.tick(1.0 / 60.0);
+        assert!(player.active_expressions().is_empty());
+
+        assert_eq!(player.press_key("1", false, false, false), Some(0));
+        assert!(player.is_playing());
+        assert_eq!(player.press_key("2", false, false, false), None);
+        assert_eq!(player.press_key("Shift", false, true, false), None);
+        assert!(!player.trigger_hotkey(5));
     }
 
     #[test]

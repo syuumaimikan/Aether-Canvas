@@ -735,6 +735,40 @@ fn rig_character(doc: &mut Document, l: &Layers) -> aether_core::Result<()> {
     }
     rig.motions.push(motion);
 
+    // 6. Expressions, and keys for everything: 1 greets, Shift+1 and
+    //    Shift+2 switch the expressions, 0 resets.
+    use aether_document::rig::motion::{ExpressionBlend, ExpressionEntry};
+    for (name, entries) in [
+        (
+            "Smile",
+            vec![("MouthForm", 1.0), ("EyeLSmile", 1.0), ("EyeRSmile", 1.0)],
+        ),
+        (
+            "Surprised",
+            vec![
+                ("MouthOpenY", 0.7),
+                ("MouthForm", -1.0),
+                ("BrowLY", 1.0),
+                ("BrowRY", 1.0),
+            ],
+        ),
+    ] {
+        let entries = entries
+            .into_iter()
+            .map(|(param, value)| ExpressionEntry {
+                param: p(rig, param),
+                value,
+                blend: ExpressionBlend::Overwrite,
+            })
+            .collect();
+        rig.expressions.push(aether_document::rig::Expression {
+            name: name.into(),
+            entries,
+            fade: 0.25,
+        });
+    }
+    rig.hotkeys = aether_document::rig::hotkey::default_hotkeys(rig);
+
     rig.validate()?;
     println!(
         "rig: {} parameters, {} meshes ({} vertices), {} deformers, {} physics groups, {} drivers",

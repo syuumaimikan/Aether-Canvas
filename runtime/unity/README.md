@@ -64,7 +64,8 @@ public class Character : MonoBehaviour
 | `pixelsPerUnit`, `pivot`, `resolution`, `tint`, `sortingLayerName`, `sortingOrder` | Placement and drawing |
 | `showInScene` | Off: draw only into `Output` (a `RenderTexture`, premultiplied), for a `RawImage` with the `AetherCanvas/Display` material, or your own material |
 | `lipSyncSource`, `lipSyncGain` | Lip sync from an `AudioSource`. It uses the same loudness and brightness measures as the editor and web player |
-| `SetParameter`, `GetParameter`, `PlayMotion`, `SetExpression`, `TrackFace` | |
+| `SetParameter`, `GetParameter`, `PlayMotion`, `SetExpression`, `ToggleExpression`, `TrackFace` | Expressions toggled on stack |
+| `hotkeys`, `HotkeyPressed`, `PressKey(key, ctrl, shift, alt)` | Keys set up in the editor's Hotkeys panel play motions and switch expressions (through Unity's Input Manager; with only the Input System package, call `PressKey` from your own input actions) |
 | `HitTest(world)`, `LookAtWorld(world)`, `WorldToModel`, `ModelToWorld` | |
 | `LoadFromFile(path)` | Load a model at run time, for example from `StreamingAssets` |
 | `Player` | The full player API (`AetherCanvas.Player`), which works in plain .NET too |

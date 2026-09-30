@@ -47,6 +47,7 @@ static class Program
             Poses(player, referenceDir);
             Drawing(player);
             Motions(player);
+            Hotkeys(player);
             Tracking(player);
         }
 
@@ -76,6 +77,25 @@ static class Program
 
         Console.WriteLine($"{failures} failed");
         return failures > 0 ? 1 : 0;
+    }
+
+    static void Hotkeys(Player player)
+    {
+        player.Reset();
+        var listed = string.Join(", ", player.Hotkeys.Select(k => k.ToString()));
+        Check(listed == "1: Greeting, Shift+1: Smile, Shift+2: Surprised, 0: Reset", $"hotkeys are listed ({listed})");
+        Check(player.Hotkeys[1].Key == "1", "a hotkey's key without its modifiers");
+        Check(player.PressKey("Alpha1", shift: true) == 1, "Unity's key names press hotkeys");
+        player.Tick(1f);
+        Check(player.IsExpressionActive("Smile") && Math.Abs(player.GetParameter("MouthForm") - 1) < 1e-6,
+            "a hotkey switches its expression on");
+        Check(player.ToggleExpression("Smile"), "expressions toggle by name");
+        player.Tick(1f);
+        Check(!player.IsExpressionActive("Smile"), "and off again");
+        Check(player.PressKey("1") == 0 && player.IsPlaying, "a hotkey plays its motion");
+        Check(player.PressKey("7") == -1 && player.PressKey("") == -1, "unbound keys do nothing");
+        Check(player.TriggerHotkey(3) && !player.TriggerHotkey(9), "hotkeys trigger by index");
+        player.Reset();
     }
 
     static void Basics(Player player)

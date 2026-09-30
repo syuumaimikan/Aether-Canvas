@@ -53,6 +53,34 @@ func run() -> void:
 		model.advance(1.0 / 60.0)
 	check(not model.is_motion_playing(), "stopped motions fade out")
 
+	# Hotkeys: listed, pressed on the keyboard, and pressed by name.
+	model.reset_pose()
+	check(model.get_hotkeys() == PackedStringArray(["1: Greeting", "Shift+1: Smile", "Shift+2: Surprised", "0: Reset"]),
+		"hotkeys are listed (%s)" % [model.get_hotkeys()])
+	var fired := []
+	model.hotkey_pressed.connect(func(hotkey_name, keys): fired.append("%s %s" % [keys, hotkey_name]))
+	var key := InputEventKey.new()
+	key.keycode = KEY_1
+	key.shift_pressed = true
+	key.pressed = true
+	root.push_input(key)
+	model.advance(1.0)
+	check(model.is_expression_active("Smile"), "Shift+1 on the keyboard switches Smile on")
+	check(fired == ["Shift+1 Smile"], "and the node says so (%s)" % [fired])
+	check(model.toggle_expression("Smile"), "expressions toggle by name")
+	model.advance(1.0)
+	check(not model.is_expression_active("Smile"), "and off again")
+	check(model.press_key("1", false, false, false) and model.is_motion_playing(), "a hotkey plays its motion")
+	check(not model.press_key("7", false, false, false), "unbound keys do nothing")
+	model.hotkeys_enabled = false
+	root.push_input(key)
+	check(fired.size() == 2, "hotkeys can be switched off")
+	model.hotkeys_enabled = true
+	check(model.trigger_hotkey(3) and not model.trigger_hotkey(9), "hotkeys trigger by index")
+	for i in 90:
+		model.advance(1.0 / 60.0)
+	check(not model.is_motion_playing(), "0 resets")
+
 	model.reset_pose()
 	for i in 60:
 		model.track_face(20.0, 0.0, 0.0, {"jawOpen": 0.5, "eyeBlinkLeft": 0.9})

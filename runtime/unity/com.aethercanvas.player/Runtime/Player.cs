@@ -74,12 +74,48 @@ namespace AetherCanvas
     /// expressions, blinking, breathing, look-at, lip sync and face tracking.
     /// Not thread-safe; dispose it to free the native player.
     /// </summary>
+    /// <summary>
+    /// A key that plays a motion or switches an expression, set up in the
+    /// editor's Hotkeys panel.
+    /// </summary>
+    public readonly struct Hotkey
+    {
+        /// <summary>Its index in <see cref="Player.Hotkeys"/>.</summary>
+        public readonly int Index;
+        /// <summary>Its name, or the motion or expression it plays.</summary>
+        public readonly string Name;
+        /// <summary>The keys, written like "Shift+1".</summary>
+        public readonly string Keys;
+
+        internal Hotkey(int index, string name, string keys)
+        {
+            Index = index;
+            Name = name;
+            Keys = keys;
+        }
+
+        /// <summary>The key without its modifiers ("1" for "Shift+1").</summary>
+        public string Key
+        {
+            get
+            {
+                if (Keys.EndsWith("++")) return "+";
+                var plus = Keys.LastIndexOf('+');
+                return plus < 0 ? Keys : Keys.Substring(plus + 1);
+            }
+        }
+
+        /// <inheritdoc/>
+        public override string ToString() => $"{Keys}: {Name}";
+    }
+
     public sealed class Player : IDisposable
     {
         IntPtr handle;
         readonly string[] parameters;
         readonly string[] motions;
         readonly string[] expressions;
+        readonly Hotkey[] hotkeys;
         readonly string[] parts;
         readonly string[] textureFiles;
         readonly List<MotionEvent> events = new List<MotionEvent>();
@@ -90,6 +126,10 @@ namespace AetherCanvas
             parameters = Names(Native.aether_player_parameter_count(handle), Native.aether_player_parameter_name);
             motions = Names(Native.aether_player_motion_count(handle), Native.aether_player_motion_name);
             expressions = Names(Native.aether_player_expression_count(handle), Native.aether_player_expression_name);
+            var hotkeyNames = Names(Native.aether_player_hotkey_count(handle), Native.aether_player_hotkey_name);
+            var hotkeyKeys = Names((uint)hotkeyNames.Length, Native.aether_player_hotkey_keys);
+            hotkeys = new Hotkey[hotkeyNames.Length];
+            for (var i = 0; i < hotkeys.Length; i++) hotkeys[i] = new Hotkey(i, hotkeyNames[i], hotkeyKeys[i]);
             parts = Names(Native.aether_player_part_count(handle), Native.aether_player_part_name);
             textureFiles = Names(Native.aether_player_texture_count(handle), Native.aether_player_texture_file);
         }
@@ -197,6 +237,44 @@ namespace AetherCanvas
             if (index < 0 && !string.IsNullOrEmpty(name)) return false;
             Native.aether_player_set_expression(Handle, index);
             return true;
+        }
+
+        /// <summary>Switch an expression on or off, leaving the others. False for an unknown name.</summary>
+        public bool ToggleExpression(string name)
+        {
+            var index = Array.IndexOf(expressions, name);
+            if (index < 0) return false;
+            Native.aether_player_toggle_expression(Handle, (uint)index);
+            return true;
+        }
+
+        /// <summary>True while an expression is switched on.</summary>
+        public bool IsExpressionActive(string name)
+        {
+            var index = Array.IndexOf(expressions, name);
+            return index >= 0 && Native.aether_player_expression_active(Handle, (uint)index) != 0;
+        }
+
+        // ----------------------------------------------------------- hotkeys
+
+        /// <summary>The model's hotkeys.</summary>
+        public IReadOnlyList<Hotkey> Hotkeys => hotkeys;
+
+        /// <summary>Carry out a hotkey as if its key were pressed. False for a bad index.</summary>
+        public bool TriggerHotkey(int index) =>
+            index >= 0 && Native.aether_player_trigger_hotkey(Handle, (uint)index) != 0;
+
+        /// <summary>
+        /// A key was pressed: trigger the hotkey bound to it. <paramref name="key"/>
+        /// names it as printed ("1", "A", "F5", "Space"); Unity's KeyCode names
+        /// ("Alpha1", "Keypad1") work too. Returns the hotkey's index, or -1.
+        /// </summary>
+        public int PressKey(string key, bool ctrl = false, bool shift = false, bool alt = false)
+        {
+            if (string.IsNullOrEmpty(key)) return -1;
+            var bytes = Encoding.UTF8.GetBytes(key);
+            var modifiers = (ctrl ? 1u : 0u) | (shift ? 2u : 0u) | (alt ? 4u : 0u);
+            return Native.aether_player_press_key(Handle, bytes, (UIntPtr)bytes.Length, modifiers);
         }
 
         // ------------------------------------------------------------ inputs
@@ -451,6 +529,13 @@ namespace AetherCanvas
         [DllImport(Lib, CallingConvention = C)] public static extern uint aether_player_expression_count(IntPtr p);
         [DllImport(Lib, CallingConvention = C)] public static extern IntPtr aether_player_expression_name(IntPtr p, uint index, out UIntPtr len);
         [DllImport(Lib, CallingConvention = C)] public static extern void aether_player_set_expression(IntPtr p, int index);
+        [DllImport(Lib, CallingConvention = C)] public static extern void aether_player_toggle_expression(IntPtr p, uint index);
+        [DllImport(Lib, CallingConvention = C)] public static extern uint aether_player_expression_active(IntPtr p, uint index);
+        [DllImport(Lib, CallingConvention = C)] public static extern uint aether_player_hotkey_count(IntPtr p);
+        [DllImport(Lib, CallingConvention = C)] public static extern IntPtr aether_player_hotkey_name(IntPtr p, uint index, out UIntPtr len);
+        [DllImport(Lib, CallingConvention = C)] public static extern IntPtr aether_player_hotkey_keys(IntPtr p, uint index, out UIntPtr len);
+        [DllImport(Lib, CallingConvention = C)] public static extern uint aether_player_trigger_hotkey(IntPtr p, uint index);
+        [DllImport(Lib, CallingConvention = C)] public static extern int aether_player_press_key(IntPtr p, byte[] key, UIntPtr len, uint modifiers);
         [DllImport(Lib, CallingConvention = C)] public static extern void aether_player_look_at(IntPtr p, float x, float y);
         [DllImport(Lib, CallingConvention = C)] public static extern void aether_player_look_ahead(IntPtr p);
         [DllImport(Lib, CallingConvention = C)] public static extern void aether_player_set_audio(IntPtr p, float level, float brightness);

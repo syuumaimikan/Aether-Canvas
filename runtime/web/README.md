@@ -48,6 +48,13 @@ Copy `aether-player.js` and `aether_player.wasm` next to each other, then:
   // …or lip sync from a microphone or an <audio> element.
   player.lipSync(await navigator.mediaDevices.getUserMedia({ audio: true }));
 
+  // Keys set up in the editor's Hotkeys panel play motions and switch
+  // expressions, as in VTube Studio (1 = a motion, Shift+1 = an expression…).
+  player.listenForHotkeys();
+  player.on('hotkey', ({ keys, name }) => console.log(keys, name));
+  player.pressKey('1');                // or press one yourself
+  player.toggleExpression('Smile');    // expressions stack; toggle them on and off
+
   // Record a clip (WebM; a transparent background stays transparent).
   const recording = player.record();
   // …later
@@ -82,7 +89,7 @@ The layers underneath are usable on their own:
 | Class | Does | Needs |
 | --- | --- | --- |
 | `AetherRuntime` | Loads the WebAssembly module | Any JavaScript engine with WebAssembly (browsers, Node) |
-| `AetherModel` | Parameters, motions, expressions, look-at, lip sync, physics, the per-frame draw list, hit testing | An `AetherRuntime` |
+| `AetherModel` | Parameters, motions, expressions, hotkeys, look-at, lip sync, physics, the per-frame draw list, hit testing | An `AetherRuntime` |
 | `WebGLRenderer` | Draws an `AetherModel` into a WebGL context you own | WebGL 1 or 2 |
 | `AetherPlayer` | All of the above on a `<canvas>`, with a frame loop and input helpers | A browser |
 

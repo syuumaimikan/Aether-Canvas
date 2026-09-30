@@ -72,6 +72,8 @@ pub struct AetherPlayer {
     parameter_names: Vec<Vec<u8>>,
     motion_names: Vec<Vec<u8>>,
     expression_names: Vec<Vec<u8>>,
+    hotkey_names: Vec<Vec<u8>>,
+    hotkey_keys: Vec<Vec<u8>>,
     part_names: Vec<Vec<u8>>,
     texture_files: Vec<Vec<u8>>,
     event_names: Vec<Vec<u8>>,
@@ -95,6 +97,13 @@ impl AetherPlayer {
             parameter_names: names(&mut model.rig.parameters.iter().map(|p| p.name.as_str())),
             motion_names: names(&mut model.rig.motions.iter().map(|m| m.name.as_str())),
             expression_names: names(&mut model.rig.expressions.iter().map(|e| e.name.as_str())),
+            hotkey_names: model.rig.hotkeys.iter().map(|h| c_string(&h.label())).collect(),
+            hotkey_keys: model
+                .rig
+                .hotkeys
+                .iter()
+                .map(|h| c_string(&h.keys.to_string()))
+                .collect(),
             part_names: names(&mut model.parts.iter().map(|p| p.name.as_str())),
             texture_files: names(&mut model.textures.iter().map(|t| t.file.as_str())),
             event_names: Vec::new(),
@@ -452,6 +461,112 @@ pub unsafe extern "C" fn aether_player_set_expression(p: *mut AetherPlayer, inde
     if let Some(h) = get_mut(p) {
         h.player.set_expression(usize::try_from(index).ok());
     }
+}
+
+/// Switch an expression on or off, leaving the others.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_toggle_expression(p: *mut AetherPlayer, index: u32) {
+    if let Some(h) = get_mut(p) {
+        h.player.toggle_expression(index as usize);
+    }
+}
+
+/// 1 while an expression is switched on.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_expression_active(p: *const AetherPlayer, index: u32) -> u32 {
+    get(p)
+        .map(|h| h.player.active_expressions().contains(&(index as usize)) as u32)
+        .unwrap_or(0)
+}
+
+/// Number of hotkeys.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_hotkey_count(p: *const AetherPlayer) -> u32 {
+    get(p).map(|h| h.hotkey_names.len() as u32).unwrap_or(0)
+}
+
+/// A hotkey's name (its own, or what it plays).
+///
+/// # Safety
+/// `p` must be null or a live handle; `len` null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_hotkey_name(
+    p: *const AetherPlayer,
+    index: u32,
+    len: *mut usize,
+) -> *const u8 {
+    out_str(get(p).and_then(|h| h.hotkey_names.get(index as usize)), len)
+}
+
+/// A hotkey's keys, written like `Shift+1`.
+///
+/// # Safety
+/// `p` must be null or a live handle; `len` null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_hotkey_keys(
+    p: *const AetherPlayer,
+    index: u32,
+    len: *mut usize,
+) -> *const u8 {
+    out_str(get(p).and_then(|h| h.hotkey_keys.get(index as usize)), len)
+}
+
+/// Carry out a hotkey as if its key were pressed. Returns 0 for a bad index
+/// or a missing motion or expression.
+///
+/// # Safety
+/// `p` must be null or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_trigger_hotkey(p: *mut AetherPlayer, index: u32) -> u32 {
+    get_mut(p)
+        .map(|h| h.player.trigger_hotkey(index as usize) as u32)
+        .unwrap_or(0)
+}
+
+/// Modifier bits for [`aether_player_press_key`].
+pub const MODIFIER_CTRL: u32 = 1;
+/// Shift.
+pub const MODIFIER_SHIFT: u32 = 2;
+/// Alt.
+pub const MODIFIER_ALT: u32 = 4;
+
+/// A key was pressed: `key` names it in UTF-8 (`1`, `Digit1`, `a`, `F5`,
+/// `Space`…), `modifiers` combines 1 (Ctrl), 2 (Shift) and 4 (Alt).
+/// Returns the index of the hotkey that fired, or -1.
+///
+/// # Safety
+/// `p` must be null or a live handle; `key` null or valid for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn aether_player_press_key(
+    p: *mut AetherPlayer,
+    key: *const u8,
+    len: usize,
+    modifiers: u32,
+) -> i32 {
+    let (Some(h), false) = (get_mut(p), key.is_null()) else {
+        return -1;
+    };
+    let Ok(key) = std::str::from_utf8(std::slice::from_raw_parts(key, len)) else {
+        return -1;
+    };
+    h.player
+        .press_key(
+            key,
+            modifiers & MODIFIER_CTRL != 0,
+            modifiers & MODIFIER_SHIFT != 0,
+            modifiers & MODIFIER_ALT != 0,
+        )
+        .map(|i| i as i32)
+        .unwrap_or(-1)
 }
 
 /// Look towards `(x, y)` in `-1..=1`, y up.
@@ -897,6 +1012,40 @@ mod tests {
             aether_player_tick(ptr::null_mut(), 0.1);
             assert_eq!(aether_player_draw_count(ptr::null()), 0);
             aether_player_free(p);
+        }
+    }
+
+    #[test]
+    fn hotkeys_through_the_c_api() {
+        use aether_rig::{Hotkey, HotkeyAction, KeyChord, Motion};
+        let mut model = Model::from_json(&model_json()).unwrap();
+        model.rig.motions.push(Motion::new("Wave", 1.0, 30.0));
+        model.rig.hotkeys.push(Hotkey::new(
+            KeyChord::parse("Ctrl+W").unwrap(),
+            HotkeyAction::PlayMotion("Wave".into()),
+        ));
+        let json = model.to_json();
+        unsafe {
+            let p = aether_player_new(json.as_ptr(), json.len());
+            assert!(!p.is_null());
+            assert_eq!(aether_player_hotkey_count(p), 1);
+            let mut len = 0usize;
+            let name = aether_player_hotkey_name(p, 0, &mut len);
+            assert_eq!(text(name, len), "Wave");
+            let keys = aether_player_hotkey_keys(p, 0, &mut len);
+            assert_eq!(text(keys, len), "Ctrl+W");
+            let w = b"w";
+            assert_eq!(
+                aether_player_press_key(p, w.as_ptr(), 1, 0),
+                -1,
+                "Ctrl is part of it"
+            );
+            assert_eq!(aether_player_press_key(p, w.as_ptr(), 1, MODIFIER_CTRL), 0);
+            assert_eq!(aether_player_is_playing(p), 1);
+            assert_eq!(aether_player_trigger_hotkey(p, 3), 0);
+            assert_eq!(aether_player_press_key(p, ptr::null(), 0, 0), -1);
+            aether_player_free(p);
+            assert_eq!(aether_player_hotkey_count(ptr::null()), 0);
         }
     }
 

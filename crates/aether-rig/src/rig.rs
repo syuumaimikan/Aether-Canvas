@@ -103,6 +103,9 @@ pub struct Rig {
     /// Procedural behaviours (blinking, breathing, look-at, lip sync).
     #[serde(default)]
     pub behaviours: Behaviours,
+    /// Keys that play motions and switch expressions while performing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hotkeys: Vec<crate::hotkey::Hotkey>,
     /// Imported Live2D models, each drawn on its own layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cubism: Vec<crate::cubism::CubismRig>,
